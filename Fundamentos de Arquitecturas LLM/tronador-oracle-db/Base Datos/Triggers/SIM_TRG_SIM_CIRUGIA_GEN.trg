@@ -1,0 +1,11 @@
+CREATE OR REPLACE TRIGGER SIM_TRG_SIM_CIRUGIA_GEN
+  before update on SIM_CIRUGIA_GEN
+  for each row
+begin
+
+    UPDATE SIM_CIRUGIA
+    SET DESC_CIRUGIA = :new.DESC_CIRUGIA
+    WHERE COD_CIRUGIA = :new.cod_cirugia;
+
+end SIM_TRG_SIM_CIRUGIA_GEN;
+/

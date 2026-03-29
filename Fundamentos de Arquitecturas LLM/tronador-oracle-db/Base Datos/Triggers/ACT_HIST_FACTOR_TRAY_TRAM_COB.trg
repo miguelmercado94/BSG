@@ -1,0 +1,59 @@
+CREATE OR REPLACE TRIGGER ACT_HIST_FACTOR_TRAY_TRAM_COB
+AFTER
+--	INSERT OR
+	UPDATE OR
+	DELETE
+	ON C1150763
+FOR EACH ROW
+DECLARE
+	mi_contador		NUMBER;
+BEGIN		--cod_cob, txt_cob, basica, cod_cob_inf
+	IF UPDATING THEN
+
+		--Llamado a la Insercion de la Informacion Historica del Grupo_Factor por Trayecto/Tramo/Cobertura
+		PCK115_FACT_TRAY_TRAM_COB_HIS.PRC_CARG_FAC_TRY_TRM_COB_HI
+		(
+			P_TIPO_POLIZA =>
+				:OLD.TIPO_POLIZA,
+			P_TRAMO =>
+				:OLD.TRAMO,
+			P_TRAYECTO =>
+				:OLD.TRAYECTO,
+			P_COBERTURA =>
+				:OLD.COBERTURA,
+			P_GRUPO_FACTOR =>
+				:OLD.GRUPO_FACTOR,
+			P_FECHA_VIG =>
+				:OLD.FECHA_VIG,
+			P_FECHA_BAJA =>
+				:OLD.FECHA_BAJA,
+			P_TIPO_OPERACION =>
+				PCK115_CONSTANTES_TRANSPORTES.ACTUALIZACION
+		);
+
+	ELSIF DELETING THEN
+
+		--Llamado a la Insercion de la Informacion Historica del Grupo_Factor por Trayecto/Tramo/Cobertura
+		PCK115_FACT_TRAY_TRAM_COB_HIS.PRC_CARG_FAC_TRY_TRM_COB_HI
+		(
+			P_TIPO_POLIZA =>
+				:OLD.TIPO_POLIZA,
+			P_TRAMO =>
+				:OLD.TRAMO,
+			P_TRAYECTO =>
+				:OLD.TRAYECTO,
+			P_COBERTURA =>
+				:OLD.COBERTURA,
+			P_GRUPO_FACTOR =>
+				:OLD.GRUPO_FACTOR,
+			P_FECHA_VIG =>
+				:OLD.FECHA_VIG,
+			P_FECHA_BAJA =>
+				:OLD.FECHA_BAJA,
+			P_TIPO_OPERACION =>
+				PCK115_CONSTANTES_TRANSPORTES.ELIMINACION
+		);
+
+	END IF;
+END act_hist_factor_tray_tram_cob;
+/

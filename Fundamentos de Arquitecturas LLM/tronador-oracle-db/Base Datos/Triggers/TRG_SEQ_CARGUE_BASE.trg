@@ -1,0 +1,17 @@
+CREATE OR REPLACE TRIGGER TRG_SEQ_CARGUE_BASE 
+  BEFORE INSERT ON SIMAPI_CARGUE_PREDIAL_BASE
+  FOR EACH ROW
+DECLARE
+  -- local variables here
+  V_secuencia number(17) := 0;
+BEGIN
+  BEGIN
+     SELECT SEQ_PREDIAL_CARGUE_BASE.Nextval
+     INTO   V_secuencia
+     FROM   dual;
+  END;
+
+  :new.ID_CARGUE_BASE := V_secuencia;
+
+END TRG_SEQ_CARGUE_BASE;
+/

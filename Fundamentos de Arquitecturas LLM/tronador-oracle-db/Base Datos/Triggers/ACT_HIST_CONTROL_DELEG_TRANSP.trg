@@ -1,0 +1,51 @@
+CREATE OR REPLACE TRIGGER ACT_HIST_CONTROL_DELEG_TRANSP
+AFTER
+--	INSERT OR
+	UPDATE OR
+	DELETE
+	ON C2150755
+FOR EACH ROW
+DECLARE
+	mi_contador		NUMBER;
+BEGIN		--cod_cob, txt_cob, basica, cod_cob_inf
+	IF UPDATING THEN
+
+		--Llamado a la Insercion del Historico de Control de la Delegacion
+		PCK215_CONTROL_DELEG_HIS.PRC_CARG_CONTROL_DELEG_HIS
+		(
+			P_CLAVE =>
+				:OLD.CLAVE,
+			P_COD_AGENCIA =>
+				:OLD.COD_AGENCIA,
+			P_ABREV_AGENCIA =>
+				:OLD.ABREV_AGENCIA,
+			P_FECHA_VIG =>
+				:OLD.FECHA_VIG,
+			P_FECHA_BAJA =>
+				:OLD.FECHA_BAJA,
+			P_TIPO_OPERACION =>
+				PCK115_CONSTANTES_TRANSPORTES.ACTUALIZACION
+		);
+
+	ELSIF DELETING THEN
+
+		--Llamado a la Insercion del Historico de Control de la Delegacion
+		PCK215_CONTROL_DELEG_HIS.PRC_CARG_CONTROL_DELEG_HIS
+		(
+			P_CLAVE =>
+				:OLD.CLAVE,
+			P_COD_AGENCIA =>
+				:OLD.COD_AGENCIA,
+			P_ABREV_AGENCIA =>
+				:OLD.ABREV_AGENCIA,
+			P_FECHA_VIG =>
+				:OLD.FECHA_VIG,
+			P_FECHA_BAJA =>
+				:OLD.FECHA_BAJA,
+			P_TIPO_OPERACION =>
+				PCK115_CONSTANTES_TRANSPORTES.ELIMINACION
+		);
+
+	END IF;
+END act_hist_control_deleg_transp;
+/

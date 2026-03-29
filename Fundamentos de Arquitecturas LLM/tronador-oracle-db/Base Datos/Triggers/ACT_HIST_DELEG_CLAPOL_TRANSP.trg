@@ -1,0 +1,55 @@
+CREATE OR REPLACE TRIGGER ACT_HIST_DELEG_CLAPOL_TRANSP
+AFTER
+--	INSERT OR
+	UPDATE OR
+	DELETE
+	ON C2150754
+FOR EACH ROW
+DECLARE
+	mi_contador		NUMBER;
+BEGIN		--cod_cob, txt_cob, basica, cod_cob_inf
+	IF UPDATING THEN
+
+		--Llamado a la Insercion del Historico de la Delegacion por Clase de Poliza
+		PCK215_DELEG_CLAPOL_HIS.PRC_CARG_DELEG_CLAPOL_HIS
+		(
+			P_CLASE_POLIZA =>
+				:OLD.CLASE_POLIZA,
+			P_CLAVE =>
+				:OLD.CLAVE,
+			P_VALOR =>
+				:OLD.VALOR,
+			P_VALOR_LIMITE =>
+				:OLD.VALOR_LIMITE,
+			P_FECHA_VIG =>
+				:OLD.FECHA_VIG,
+			P_FECHA_BAJA =>
+				:OLD.FECHA_BAJA,
+			P_TIPO_OPERACION =>
+				PCK115_CONSTANTES_TRANSPORTES.ACTUALIZACION
+		);
+
+	ELSIF DELETING THEN
+
+		--Llamado a la Insercion del Historico de la Delegacion por Clase de Poliza
+		PCK215_DELEG_CLAPOL_HIS.PRC_CARG_DELEG_CLAPOL_HIS
+		(
+			P_CLASE_POLIZA =>
+				:OLD.CLASE_POLIZA,
+			P_CLAVE =>
+				:OLD.CLAVE,
+			P_VALOR =>
+				:OLD.VALOR,
+			P_VALOR_LIMITE =>
+				:OLD.VALOR_LIMITE,
+			P_FECHA_VIG =>
+				:OLD.FECHA_VIG,
+			P_FECHA_BAJA =>
+				:OLD.FECHA_BAJA,
+			P_TIPO_OPERACION =>
+				PCK115_CONSTANTES_TRANSPORTES.ELIMINACION
+		);
+
+	END IF;
+END act_hist_deleg_clapol_transp;
+/

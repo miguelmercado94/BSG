@@ -1,0 +1,7 @@
+CREATE OR REPLACE TRIGGER trg_emi_enfermedad
+AFTER INSERT ON EMI_ENFERMEDAD_ASEGURADO
+FOR EACH ROW
+BEGIN
+  UPDATE EMI_BLOQUE_MEDICO SET DEBE_TRAER_HISTORIA_CLINICA = 'S' WHERE numero_solicitud = :NEW.numero_solicitud AND codigo_riesgo = :NEW.codigo_riesgo;
+END;
+/

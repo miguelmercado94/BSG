@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend-sesion1
+      dockerfile: Dockerfile
+    container_name: docviz-backend
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+
+  frontend:
+    build:
+      context: ./frontend-sesion1
+      dockerfile: Dockerfile
+    container_name: docviz-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend

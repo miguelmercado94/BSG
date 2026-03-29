@@ -1,0 +1,22 @@
+CREATE OR REPLACE TRIGGER TRG_SEQ_C7990400
+  before INSERT OR UPDATE on C7990400
+  for each row
+declare
+  -- local variables here
+begin
+     IF INSERTING THEN
+     SELECT SEQ_C7990400.NEXTVAL
+       INTO :NEW.SEQ_REGISTRO
+       FROM DUAL;
+       IF :NEW.USER_CREACION  IS NULL THEN
+           :NEW.USER_CREACION := substr(USER,5,8);
+       END IF;
+      :NEW.FECHA_CREACION := SYSDATE;
+   ELSE
+       IF :NEW.USER_MODIFICACION  IS NULL THEN
+           :NEW.USER_MODIFICACION := substr(USER,5,8);
+       END IF;
+      :NEW.FECHA_MODIFICACION   := SYSDATE;
+   END IF;
+end TRG_SEQ_C7990400;
+/

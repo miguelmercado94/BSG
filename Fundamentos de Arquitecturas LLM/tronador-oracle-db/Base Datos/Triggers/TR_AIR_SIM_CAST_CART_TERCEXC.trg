@@ -1,0 +1,24 @@
+CREATE OR REPLACE TRIGGER TR_AIR_SIM_CAST_CART_TERCEXC
+/*
+    Modifico : Rolphy Quintero - Asesoftware - Germán Muñoz
+    fecha :  Agosto 25 de 2015 - Mantis 38430 - Proyecto Castigo de Cartera
+    Desc : Creación del trigger. Auditar tabla SIM_CAST_CART_TERCERO_EXCLUIDO.
+*/
+  AFTER INSERT ON SIM_CAST_CART_TERCERO_EXCLUIDO FOR EACH ROW
+Declare
+  vl_Tipo_Operacion  SIM_HISTORIAL_CASTCART_TERCEXC.Tipo_Operacion%type;
+Begin
+  If Inserting Then
+    If SIM_PCK_CAST_CART_TERCEXCLUIDO.Fun_Existe_Tercero(:NEW.TDOC_TERCERO, :NEW.NRO_DOCUMTO) = 'S' Then
+      vl_Tipo_Operacion := 'C'; -- Creación
+      INSERT INTO SIM_HISTORIAL_CASTCART_TERCEXC (SECUENCIA, ROWID_CASTCART_TERC_EXCLUIDO, FECHA_CREACION_REGISTRO, TIPO_OPERACION,
+      TDOC_TERCERO, NRO_DOCUMTO, ESTADO, FECHA_CREACION, USUARIO_CREACION, FECHA_MODIFICACION, USUARIO_MODIFICACION)
+      VALUES (SEQ_HISTORIAL_CASTCART_TERCEXC.NEXTVAL, :NEW.ROWID, SYSDATE, vl_Tipo_Operacion, :NEW.TDOC_TERCERO,
+      :NEW.NRO_DOCUMTO, :NEW.ESTADO, :NEW.FECHA_CREACION, :NEW.USUARIO_CREACION, :NEW.FECHA_MODIFICACION, :NEW.USUARIO_MODIFICACION);
+    Else
+      raise_application_error(-20001,'El tipo y número de identificación '||:NEW.TDOC_TERCERO||'-'||:NEW.NRO_DOCUMTO||
+      ', no existe en la base de terceros');
+    End If;
+  End If;
+End TR_AIR_SIM_CAST_CART_TERCEXC;
+/

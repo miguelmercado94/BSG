@@ -1,0 +1,45 @@
+CREATE OR REPLACE TRIGGER TR_BUDR_SIM_CAST_CART_CUENTAS
+/*
+    Modifico : Rolphy Quintero - Asesoftware - Germán Muñoz
+    fecha :  Septiembre 29 de 2015 - Mantis 38430 - Proyecto Castigo de Cartera
+    Desc : Se adiciona la validación de la existencia de la cuenta contable. También
+           se adiciona la columna COD_MON en la auditoria.
+    
+    Modifico : Rolphy Quintero - Asesoftware - Germán Muñoz
+    fecha :  Septiembre 28 de 2015 - Mantis 38430 - Proyecto Castigo de Cartera
+    Desc : Se adiciona a la auditoría la columna COD_TIPO_CUENTA.
+    
+    Modifico : Rolphy Quintero - Asesoftware - Germán Muñoz
+    fecha :  Agosto 19 de 2015 - Mantis 38430 - Proyecto Castigo de Cartera
+    Desc : Creación del trigger. Auditar tabla SIM_CASTIGO_CARTERA_CUENTAS.
+*/
+  BEFORE UPDATE OR DELETE ON SIM_CASTIGO_CARTERA_CUENTAS FOR EACH ROW
+Declare
+  vl_Tipo_Operacion  SIM_HISTORIAL_CASTCART_CUENTAS.Tipo_Operacion%type;
+Begin
+  If Updating Then
+    vl_Tipo_Operacion := 'A'; -- Actualización
+    If SIM_PCK_CASTCART_CUENTAS.Fun_Existe_Cuenta_Contable(:NEW.COD_CIA, :NEW.CUENTA_CONTABLE) = 'S' Then
+      INSERT INTO SIM_HISTORIAL_CASTCART_CUENTAS (SECUENCIA, ROWID_CASTCART_CUENTAS, FECHA_CREACION_REGISTRO,
+      TIPO_OPERACION, COD_CIA, COD_SECC, COD_RAMO, COD_CONCEPTO_CONTABLE, CUENTA_CONTABLE, DESCRIPCION_CONCEPTO,
+      ESTADO, FECHA_CREACION, USUARIO_CREACION, FECHA_MODIFICACION, USUARIO_MODIFICACION, COD_TIPO_CUENTA, COD_MON)
+      VALUES (SEQ_HISTORIAL_CASTCART_CUENTAS.Nextval, :NEW.ROWID, SYSDATE, vl_Tipo_Operacion,
+      :NEW.COD_CIA, :NEW.COD_SECC, :NEW.COD_RAMO, :NEW.COD_CONCEPTO_CONTABLE, :NEW.CUENTA_CONTABLE, :NEW.DESCRIPCION_CONCEPTO,
+      :NEW.ESTADO, :NEW.FECHA_CREACION, :NEW.USUARIO_CREACION, :NEW.FECHA_MODIFICACION,
+      :NEW.USUARIO_MODIFICACION, :NEW.COD_TIPO_CUENTA, :NEW.COD_MON);
+    Else
+      raise_application_error(-20001,'No existe la cuenta: '||:NEW.CUENTA_CONTABLE||', en la compañía: '||:NEW.COD_CIA||
+      ', en el año de ejercicio: '||TO_CHAR(SYSDATE,'YYYY'));
+    End If;
+  Elsif Deleting Then
+    vl_Tipo_Operacion := 'B'; -- Borrado
+    INSERT INTO SIM_HISTORIAL_CASTCART_CUENTAS (SECUENCIA, ROWID_CASTCART_CUENTAS, FECHA_CREACION_REGISTRO,
+    TIPO_OPERACION, COD_CIA, COD_SECC, COD_RAMO, COD_CONCEPTO_CONTABLE, CUENTA_CONTABLE, DESCRIPCION_CONCEPTO,
+    ESTADO, FECHA_CREACION, USUARIO_CREACION, FECHA_MODIFICACION, USUARIO_MODIFICACION, COD_TIPO_CUENTA, COD_MON)
+    VALUES (SEQ_HISTORIAL_CASTCART_CUENTAS.Nextval, :OLD.ROWID, SYSDATE, vl_Tipo_Operacion,
+    :OLD.COD_CIA, :OLD.COD_SECC, :OLD.COD_RAMO, :OLD.COD_CONCEPTO_CONTABLE, :OLD.CUENTA_CONTABLE, :OLD.DESCRIPCION_CONCEPTO,
+    :OLD.ESTADO, :OLD.FECHA_CREACION, :OLD.USUARIO_CREACION, :OLD.FECHA_MODIFICACION,
+    :OLD.USUARIO_MODIFICACION, :OLD.COD_TIPO_CUENTA, :OLD.COD_MON);
+  End If;
+End TR_BUDR_SIM_CAST_CART_CUENTAS;
+/
