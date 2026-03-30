@@ -4,13 +4,14 @@ services:
       context: ./backend-sesion1
       dockerfile: Dockerfile
     container_name: docviz-backend
+    env_file:
+      - ./backend-sesion1/.env
     ports:
       - "8080:8080"
     environment:
       PORT: "8080"
-      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      # Perfil Spring: local (Ollama) por defecto; para Gemini: SPRING_PROFILES_ACTIVE=develop (y JAR build con -P"!local,develop")
+      # Ollama en el host y backend en contenedor: OLLAMA_BASE_URL=http://host.docker.internal:11434 en backend-sesion1/.env
 
   frontend:
     build:

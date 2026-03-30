@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -28,6 +29,9 @@ public class GitRepositoryService {
 
     private static final Duration CLONE_TIMEOUT = Duration.ofMinutes(15);
     private static final Duration GIT_OP_TIMEOUT = Duration.ofMinutes(2);
+
+    /** Un checkout a la vez por repo (evita bloqueo del índice Git en paralelo). */
+    private final ConcurrentHashMap<String, Object> materializeLocks = new ConcurrentHashMap<>();
 
     private final SessionRegistry sessionRegistry;
     private final DocvizProperties docvizProperties;
@@ -62,8 +66,13 @@ public class GitRepositoryService {
 
     public long objectSizeBytes(Path repoRoot, String revisionSpec, String repoRelativePath) {
         try {
-            String spec = revisionSpec + ":" + repoRelativePath;
-            String out = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "cat-file", "-s", spec).stdoutText().trim();
+            String rel = normalizeRepoRelativePath(repoRelativePath);
+            String spec = revisionSpec + ":" + rel;
+            GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "cat-file", "-s", spec);
+            if (r.exitCode() != 0) {
+                throw new IllegalStateException("git cat-file failed: " + r.stderrText().trim());
+            }
+            String out = r.stdoutText().trim();
             return Long.parseLong(out);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -73,16 +82,102 @@ public class GitRepositoryService {
         }
     }
 
-    public byte[] readBlob(Path repoRoot, String revisionSpec, String repoRelativePath) {
+    /**
+     * Descarga un único archivo (blob bajo demanda) y lo deja en el working tree: solo cuando hace
+     * falta visualizar, indexar en Pinecone o RAG — no el repo completo.
+     */
+    public void materializeFileToWorkingTree(Path repoRoot, String revisionSpec, String repoRelativePath) {
         try {
-            String spec = revisionSpec + ":" + repoRelativePath;
-            return runGit(repoRoot, GIT_OP_TIMEOUT, "git", "show", spec).stdoutBytes();
+            String rel = normalizeRepoRelativePath(repoRelativePath);
+            Object lock = materializeLocks.computeIfAbsent(
+                    repoRoot.toAbsolutePath().normalize().toString(), k -> new Object());
+            synchronized (lock) {
+                GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "checkout", revisionSpec, "--", rel);
+                if (r.exitCode() != 0) {
+                    String err = r.stderrText().trim();
+                    throw new IllegalStateException("git checkout failed (¿ruta o red?): " + err);
+                }
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
             throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
         }
+    }
+
+    public byte[] readBytesFromWorkingTree(Path repoRoot, String repoRelativePath) {
+        try {
+            String rel = normalizeRepoRelativePath(repoRelativePath);
+            Path root = repoRoot.toAbsolutePath().normalize();
+            Path file = root.resolve(rel).normalize();
+            if (!file.startsWith(root)) {
+                throw new IllegalArgumentException("invalid path");
+            }
+            if (!Files.isRegularFile(file)) {
+                throw new IllegalStateException("archivo no materializado en disco: " + rel);
+            }
+            return Files.readAllBytes(file);
+        } catch (IOException e) {
+            throw new IllegalStateException("I/O: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * {@link #materializeFileToWorkingTree} y luego lectura desde el working tree (mismo flujo que ingesta Pinecone).
+     */
+    public byte[] materializeAndReadBytes(Path repoRoot, String revisionSpec, String repoRelativePath) {
+        materializeFileToWorkingTree(repoRoot, revisionSpec, repoRelativePath);
+        return readBytesFromWorkingTree(repoRoot, repoRelativePath);
+    }
+
+    /**
+     * Quita el archivo del working tree tras haberlo leído a memoria; evita acumular todo el repo en disco
+     * en el microservicio. No usar con {@code localPath} del usuario (solo clones efímeros).
+     */
+    public void deleteMaterializedFileIfPresent(Path repoRoot, String repoRelativePath) {
+        try {
+            String rel = normalizeRepoRelativePath(repoRelativePath);
+            Path root = repoRoot.toAbsolutePath().normalize();
+            Path file = root.resolve(rel).normalize();
+            if (!file.startsWith(root)) {
+                return;
+            }
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // best effort
+        }
+    }
+
+    public byte[] readBlob(Path repoRoot, String revisionSpec, String repoRelativePath) {
+        try {
+            String rel = normalizeRepoRelativePath(repoRelativePath);
+            String spec = revisionSpec + ":" + rel;
+            GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "show", spec);
+            if (r.exitCode() != 0) {
+                throw new IllegalStateException("git show failed: " + r.stderrText().trim());
+            }
+            return r.stdoutBytes();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Git operation interrupted", e);
+        } catch (IOException e) {
+            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+        }
+    }
+
+    private static String normalizeRepoRelativePath(String repoRelativePath) {
+        if (repoRelativePath == null || repoRelativePath.isBlank()) {
+            throw new IllegalArgumentException("path required");
+        }
+        String p = repoRelativePath.replace('\\', '/').trim();
+        if (p.startsWith("/")) {
+            p = p.substring(1);
+        }
+        if (p.contains("..")) {
+            throw new IllegalArgumentException("invalid path");
+        }
+        return p;
     }
 
     public void connect(GitConnectRequest req) {
@@ -158,7 +253,8 @@ public class GitRepositoryService {
         st.disconnect();
         previous.ifPresent(this::deleteRecursivelyQuietly);
 
-        st.getContentCache().clear();
+        st.getViewerContentCache().clear();
+        st.getIngestContentCache().clear();
         String rootFolderLabel = computeRootFolderLabel(req);
         st.setConnected(root, managedCloneRoot, rev, tree, rootFolderLabel);
     }
@@ -185,6 +281,10 @@ public class GitRepositoryService {
         return slugFromGitUrl(repositoryUrl.trim());
     }
 
+    /**
+     * Clon ligero: metadatos y árbol para listar; los blobs no vienen masivos. Cada archivo se
+     * materializa después con {@link #materializeFileToWorkingTree} solo al visualizar o al indexar.
+     */
     private Path cloneMetadataOnly(String cloneUrl, String folderName) throws IOException, InterruptedException {
         Path masters = docvizProperties.resolveRootDirectory();
         Path userDir = masters.resolve(CurrentUser.require());

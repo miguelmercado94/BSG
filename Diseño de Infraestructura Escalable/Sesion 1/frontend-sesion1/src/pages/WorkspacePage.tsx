@@ -1,19 +1,37 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { fetchFileContent, fetchTags, vectorChat, vectorIngest } from "../api/client";
+import { fetchFileContent, vectorChat, vectorIngestStream } from "../api/client";
 import type { ConnectResponse, FolderStructureDto } from "../types";
 import { FolderTree } from "../components/FolderTree";
 
-type LocationState = { connect?: ConnectResponse };
+type LocationState = { connect?: ConnectResponse; selectedTags?: string[] };
+
+const FILE_PREVIEW_LRU_MAX = 5;
+
+function lruMapGet(map: Map<string, string>, key: string): string | undefined {
+  const v = map.get(key);
+  if (v === undefined) return undefined;
+  map.delete(key);
+  map.set(key, v);
+  return v;
+}
+
+function lruMapPut(map: Map<string, string>, key: string, value: string, max: number) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const first = map.keys().next().value as string | undefined;
+    if (first === undefined) break;
+    map.delete(first);
+  }
+}
 
 export function WorkspacePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const state = location.state as LocationState | undefined;
   const [connect] = useState<ConnectResponse | null>(state?.connect ?? null);
-
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagsErr, setTagsErr] = useState<string | null>(null);
+  const [selectedTags] = useState<string[]>(state?.selectedTags ?? []);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
@@ -21,6 +39,12 @@ export function WorkspacePage() {
 
   const [ingestRes, setIngestRes] = useState<string | null>(null);
   const [ingestLoading, setIngestLoading] = useState(false);
+  const [ingestProgress, setIngestProgress] = useState<{
+    totalFiles: number;
+    filesProcessed: number;
+    chunksIndexed: number;
+    currentFile: string | null;
+  } | null>(null);
 
   const [question, setQuestion] = useState("");
   const [chatAns, setChatAns] = useState<string | null>(null);
@@ -28,38 +52,26 @@ export function WorkspacePage() {
   const [chatErr, setChatErr] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
 
+  const filePreviewLru = useRef<Map<string, string>>(new Map());
+
   useEffect(() => {
     if (!connect?.connected) {
       navigate("/", { replace: true });
     }
   }, [connect, navigate]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const t = await fetchTags();
-        if (!cancelled) {
-          setTags(t.tags);
-          setTagsErr(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setTagsErr(e instanceof Error ? e.message : String(e));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   async function onSelectFile(rel: string) {
     setSelectedPath(rel);
     setFileErr(null);
+    const cached = lruMapGet(filePreviewLru.current, rel);
+    if (cached !== undefined) {
+      setFileContent(cached);
+      return;
+    }
     setFileContent(null);
     try {
       const r = await fetchFileContent(rel);
+      lruMapPut(filePreviewLru.current, rel, r.content, FILE_PREVIEW_LRU_MAX);
       setFileContent(r.content);
     } catch (e) {
       setFileErr(e instanceof Error ? e.message : String(e));
@@ -69,8 +81,26 @@ export function WorkspacePage() {
   async function onIngest() {
     setIngestRes(null);
     setIngestLoading(true);
+    setIngestProgress({ totalFiles: 0, filesProcessed: 0, chunksIndexed: 0, currentFile: null });
     try {
-      const r = await vectorIngest();
+      const r = await vectorIngestStream((ev) => {
+        if (ev.phase === "START" && ev.totalFiles != null) {
+          setIngestProgress({
+            totalFiles: ev.totalFiles,
+            filesProcessed: 0,
+            chunksIndexed: 0,
+            currentFile: null,
+          });
+        }
+        if (ev.phase === "FILE" || ev.phase === "PROGRESS") {
+          setIngestProgress((prev) => ({
+            totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
+            filesProcessed: ev.filesProcessed ?? 0,
+            chunksIndexed: ev.chunksIndexed ?? 0,
+            currentFile: ev.currentFile ?? null,
+          }));
+        }
+      });
       setIngestRes(
         `Archivos: ${r.filesProcessed}, chunks: ${r.chunksIndexed}, namespace: ${r.namespace}` +
           (r.skipped?.length ? ` · omitidos: ${r.skipped.join(", ")}` : ""),
@@ -79,6 +109,7 @@ export function WorkspacePage() {
       setIngestRes(e instanceof Error ? e.message : String(e));
     } finally {
       setIngestLoading(false);
+      setIngestProgress(null);
     }
   }
 
@@ -103,7 +134,10 @@ export function WorkspacePage() {
   if (!connect?.directory) {
     return (
       <div className="page">
-        <p>No hay datos de repositorio. <Link to="/">Volver a conectar</Link></p>
+        <p>
+          No hay datos de repositorio.{" "}
+          <Link to="/">Volver al inicio</Link>
+        </p>
       </div>
     );
   }
@@ -112,22 +146,31 @@ export function WorkspacePage() {
 
   return (
     <div className="page workspace">
-      <header className="workspace__bar">
-        <div>
+      <header className="workspace__bar workspace__bar--stacked">
+        <div className="workspace__bar-row">
           <strong>DocViz</strong>
           <span className="muted"> · {connect.usuario}</span>
-          {connect.repositoryRoot && (
-            <span className="muted"> · {connect.repositoryRoot}</span>
+        </div>
+        <div className="workspace__context-block">
+          <div className="workspace__context-label">CONTEXTO MAESTRO</div>
+          {selectedTags.length > 0 && (
+            <div className="workspace__diamonds" aria-label="Etiquetas seleccionadas">
+              {selectedTags.map((t) => (
+                <span key={t} className="tag-diamond tag-diamond--readonly">
+                  <span className="tag-diamond__label">{t}</span>
+                </span>
+              ))}
+            </div>
           )}
         </div>
-        <Link to="/" className="btn ghost">
-          Otra conexión
-        </Link>
+        {connect.repositoryRoot && (
+          <div className="workspace__repo muted small">{connect.repositoryRoot}</div>
+        )}
       </header>
 
       <div className="workspace__grid">
         <aside className="panel">
-          <h2>Árbol</h2>
+          <h2>CONTEXTO MAESTRO</h2>
           <FolderTree root={dir} onSelectFile={onSelectFile} selectedPath={selectedPath} />
         </aside>
 
@@ -135,24 +178,52 @@ export function WorkspacePage() {
           <h2>Archivo</h2>
           {selectedPath && <div className="path">{selectedPath}</div>}
           {fileErr && <p className="error">{fileErr}</p>}
-          {fileContent !== null && (
-            <pre className="file-preview">{fileContent}</pre>
-          )}
+          {fileContent !== null && <pre className="file-preview">{fileContent}</pre>}
         </section>
 
         <aside className="panel tags">
-          <h2>Tags (demo)</h2>
-          {tagsErr && <p className="error">{tagsErr}</p>}
-          <ul className="tag-list">
-            {tags.map((t) => (
-              <li key={t}>{t}</li>
-            ))}
-          </ul>
-
-          <h2 className="mt">Vector</h2>
+          <h2>Vector</h2>
           <button type="button" className="btn primary" onClick={onIngest} disabled={ingestLoading}>
             {ingestLoading ? "Indexando…" : "Ingestar en Pinecone"}
           </button>
+          {ingestLoading && ingestProgress && (
+            <div className="ingest-progress mt" aria-live="polite">
+              <div className="ingest-progress__stats">
+                {ingestProgress.totalFiles > 0 ? (
+                  <>
+                    Archivos indexados:{" "}
+                    <strong>
+                      {ingestProgress.filesProcessed} / {ingestProgress.totalFiles}
+                    </strong>
+                    <span className="muted"> · Chunks: {ingestProgress.chunksIndexed}</span>
+                  </>
+                ) : (
+                  <span className="muted">Preparando lista de archivos…</span>
+                )}
+              </div>
+              {ingestProgress.currentFile && (
+                <div className="ingest-progress__file small muted" title={ingestProgress.currentFile}>
+                  {ingestProgress.currentFile}
+                </div>
+              )}
+              <div
+                className={
+                  "ingest-progress__track" +
+                  (ingestProgress.totalFiles === 0 ? " ingest-progress__track--indeterminate" : "")
+                }
+              >
+                <div
+                  className="ingest-progress__fill"
+                  style={{
+                    width:
+                      ingestProgress.totalFiles > 0
+                        ? `${Math.min(100, (ingestProgress.filesProcessed / ingestProgress.totalFiles) * 100)}%`
+                        : "30%",
+                  }}
+                />
+              </div>
+            </div>
+          )}
           {ingestRes && <p className="small mt">{ingestRes}</p>}
 
           <form className="chat-form mt" onSubmit={onChat}>
@@ -174,9 +245,7 @@ export function WorkspacePage() {
             <div className="chat-answer">
               <p>{chatAns}</p>
               {chatSources.length > 0 && (
-                <div className="small muted">
-                  Fuentes: {chatSources.join(" · ")}
-                </div>
+                <div className="small muted">Fuentes: {chatSources.join(" · ")}</div>
               )}
             </div>
           )}
@@ -184,7 +253,7 @@ export function WorkspacePage() {
       </div>
 
       <p className="muted small workspace__hint">
-        Si recargas la página, la sesión del servidor puede perderse: vuelve a conectar el repositorio.
+        Si recargas la página, la sesión del servidor puede perderse: vuelve a conectar desde el inicio.
       </p>
     </div>
   );

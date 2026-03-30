@@ -17,10 +17,15 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# Clones locales (grandes; no versionar)
+context-masters/
+
 # Environment & secrets
 .env
 .env.local
 .env.*.local
+backend-sesion1/application-local.properties
+.pinecone.local.properties
 
 # OS / IDE
 .DS_Store

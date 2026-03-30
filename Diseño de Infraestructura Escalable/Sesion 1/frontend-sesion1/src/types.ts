@@ -34,6 +34,20 @@ export interface VectorIngestResponse {
   namespace: string;
 }
 
+/** Eventos NDJSON de POST /vector/ingest/stream */
+export type IngestProgressPhase = "START" | "FILE" | "PROGRESS" | "DONE" | "ERROR";
+
+export interface IngestProgressEvent {
+  phase: IngestProgressPhase;
+  totalFiles?: number;
+  filesProcessed?: number;
+  chunksIndexed?: number;
+  currentFile?: string;
+  namespace?: string;
+  skipped?: string[];
+  error?: string;
+}
+
 export interface VectorChatResponse {
   answer: string;
   sources: string[];

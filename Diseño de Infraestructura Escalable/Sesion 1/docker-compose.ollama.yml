@@ -1,0 +1,20 @@
+# Ollama local (LLM). Uso: docker compose -f docker-compose.ollama.yml up -d
+# Luego: docker exec ollama-local ollama pull qwen2.5:3b
+# API: http://127.0.0.1:11434
+#
+# Si falla el arranque por GPU en Windows, comenta el bloque `deploy` y usa solo CPU.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-local
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    # Quitar la línea siguiente si Docker no tiene GPU (usa CPU)
+    gpus: all
+
+volumes:
+  ollama_data:

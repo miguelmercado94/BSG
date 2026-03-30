@@ -33,12 +33,25 @@ public class FileExplorerService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "query path required");
         }
         String rev = session.getRevisionSpec();
+        FileContentCache cache = session.getViewerContentCache();
         try {
+            byte[] raw = cache.get(rel);
+            if (raw != null) {
+                FileContentResponse hit = new FileContentResponse();
+                hit.setPath(rel);
+                hit.setEncoding("utf-8");
+                hit.setContent(new String(raw, StandardCharsets.UTF_8));
+                return hit;
+            }
             long size = gitRepositoryService.objectSizeBytes(root, rev, rel);
-            if (size > FileContentCache.MAX_TOTAL_BYTES) {
+            if (size > FileContentCache.MAX_SINGLE_FILE_BYTES) {
                 throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "file too large");
             }
-            byte[] raw = gitRepositoryService.readBlob(root, rev, rel);
+            raw = gitRepositoryService.materializeAndReadBytes(root, rev, rel);
+            cache.put(rel, raw);
+            if (session.isEphemeralManagedClone()) {
+                gitRepositoryService.deleteMaterializedFileIfPresent(root, rel);
+            }
             FileContentResponse r = new FileContentResponse();
             r.setPath(rel);
             r.setEncoding("utf-8");

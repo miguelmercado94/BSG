@@ -55,22 +55,42 @@ public class PineconeVectorClient {
 
     public float[] embedQuery(String text) {
         requireKey();
-        List<float[]> batch = embedTexts(List.of(text));
+        List<float[]> batch = embedTexts(List.of(text), "query");
         return batch.get(0);
     }
 
+    /**
+     * Embeddings para fragmentos de documento (ingesta).
+     */
     public List<float[]> embedTexts(List<String> texts) {
+        return embedTexts(texts, "passage");
+    }
+
+    private List<float[]> embedTexts(List<String> texts, String inputType) {
         requireKey();
         if (texts == null || texts.isEmpty()) {
             return List.of();
         }
-        String host = getIndexHost();
+        String inferenceHost = normalizeHost(props.getPineconeInferenceHost());
+        if (inferenceHost.isBlank()) {
+            inferenceHost = "api.pinecone.io";
+        }
         try {
             var embedBody = json.createObjectNode();
             embedBody.put("model", props.getPineconeEmbedModel());
-            embedBody.set("inputs", json.valueToTree(texts));
+            var parameters = json.createObjectNode();
+            parameters.put("input_type", inputType);
+            parameters.put("truncate", "END");
+            embedBody.set("parameters", parameters);
+            var inputs = json.createArrayNode();
+            for (String t : texts) {
+                var one = json.createObjectNode();
+                one.put("text", t);
+                inputs.add(one);
+            }
+            embedBody.set("inputs", inputs);
             String body = json.writeValueAsString(embedBody);
-            String url = "https://" + host + "/embed";
+            String url = "https://" + inferenceHost + "/embed";
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofMinutes(2))
@@ -85,7 +105,6 @@ public class PineconeVectorClient {
             }
             return parseEmbedResponse(res.body(), texts.size());
         } catch (IOException | InterruptedException e) {
-            Thread.currentThread().interrupt();
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }

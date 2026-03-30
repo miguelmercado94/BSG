@@ -3,6 +3,7 @@ package com.bsg.docviz.vector;
 import com.bsg.docviz.config.VectorProperties;
 import com.bsg.docviz.dto.VectorChatResponse;
 import com.bsg.docviz.security.CurrentUser;
+import com.bsg.docviz.service.FileContentCache;
 import com.bsg.docviz.service.GitRepositoryService;
 import com.bsg.docviz.service.SessionRegistry;
 import com.bsg.docviz.util.SourceTextExtractor;
@@ -75,6 +76,7 @@ public class VectorRagService {
         }
 
         String rev = session.getRevisionSpec();
+        FileContentCache blobCache = session.getViewerContentCache();
         String repoLabel = session.getRootFolderLabel();
         Set<String> seen = new LinkedHashSet<>();
         List<String> sourcesOrdered = new ArrayList<>();
@@ -88,10 +90,17 @@ public class VectorRagService {
             String path = repoRelativePathFromSource(m.source(), repoLabel);
             try {
                 long size = gitRepositoryService.objectSizeBytes(root, rev, path);
-                if (size > com.bsg.docviz.service.FileContentCache.MAX_TOTAL_BYTES) {
+                if (size > FileContentCache.MAX_SINGLE_FILE_BYTES) {
                     continue;
                 }
-                byte[] raw = gitRepositoryService.readBlob(root, rev, path);
+                byte[] raw = blobCache.get(path);
+                if (raw == null) {
+                    raw = gitRepositoryService.materializeAndReadBytes(root, rev, path);
+                    blobCache.put(path, raw);
+                    if (session.isEphemeralManagedClone()) {
+                        gitRepositoryService.deleteMaterializedFileIfPresent(root, path);
+                    }
+                }
                 String text = SourceTextExtractor.extractText(path, raw);
                 List<String> chunks = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
                 if (m.chunkIndex() >= chunks.size()) {
