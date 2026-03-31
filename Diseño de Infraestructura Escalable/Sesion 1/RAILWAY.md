@@ -2,6 +2,8 @@
 
 Guía para publicar **backend** y **frontend** por separado. Perfil recomendado en la nube: **Spring `develop`** (chat con **Google Gemini**); el JAR debe compilarse con el perfil Maven **`!local,develop`** (dependencia `spring-ai-starter-model-google-genai`).
 
+Para **subir las imágenes a Docker Hub** (mismos Dockerfiles), ver [DOCKERHUB.md](./DOCKERHUB.md).
+
 ## Resumen
 
 | Servicio   | Raíz en el repo (desde esta carpeta) | Dockerfile        |
