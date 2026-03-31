@@ -14,4 +14,13 @@ public class SessionRegistry {
     public UserRepositoryState current() {
         return byUser.computeIfAbsent(CurrentUser.require(), k -> new UserRepositoryState());
     }
+
+    /** Sin crear entrada nueva (p. ej. cierre de sesión). */
+    public UserRepositoryState getIfPresent(String userId) {
+        return byUser.get(userId);
+    }
+
+    public void remove(String userId) {
+        byUser.remove(userId);
+    }
 }

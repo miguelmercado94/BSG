@@ -205,6 +205,41 @@ public class PineconeVectorClient {
         return matches;
     }
 
+    /**
+     * Borra todos los vectores de un namespace en el índice (equivalente a {@code delete_all} del cliente Python).
+     */
+    public void deleteAllVectorsInNamespace(String indexHost, String namespace) {
+        requireKey();
+        if (namespace == null) {
+            throw new IllegalArgumentException("namespace required");
+        }
+        String host = normalizeHost(indexHost);
+        try {
+            var body = json.createObjectNode();
+            body.put("deleteAll", true);
+            body.put("namespace", namespace);
+            String jsonBody = json.writeValueAsString(body);
+            String url = "https://" + host + "/vectors/delete";
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofMinutes(2))
+                    .header("Api-Key", props.getPineconeApiKey())
+                    .header("Content-Type", "application/json")
+                    .header("X-Pinecone-Api-Version", API_VERSION)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (res.statusCode() / 100 != 2) {
+                throw new IllegalStateException("Pinecone delete HTTP " + res.statusCode() + ": " + res.body());
+            }
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new IllegalStateException("Pinecone delete failed: " + e.getMessage(), e);
+        }
+    }
+
     public void upsertBatch(String indexHost, String namespace, List<VectorRecord> records) {
         requireKey();
         if (records == null || records.isEmpty()) {

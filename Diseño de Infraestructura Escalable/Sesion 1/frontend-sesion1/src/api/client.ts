@@ -20,6 +20,10 @@ export function setUserId(id: string): void {
   localStorage.setItem(storedKey, id.trim());
 }
 
+export function clearUserId(): void {
+  localStorage.removeItem(storedKey);
+}
+
 function apiBase(): string {
   const v = import.meta.env.VITE_API_URL;
   if (v === undefined || v === "") {
@@ -178,6 +182,24 @@ async function vectorIngestFallbackProgress(
     skipped: r.skipped,
   });
   return r;
+}
+
+export async function logoutSession(): Promise<void> {
+  const res = await fetch(`${apiBase()}/session/logout`, {
+    method: "POST",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || res.statusText;
+    try {
+      const j = JSON.parse(text) as { error?: string; message?: string };
+      msg = j.error ?? j.message ?? msg;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
 }
 
 export async function vectorChat(question: string): Promise<VectorChatResponse> {
