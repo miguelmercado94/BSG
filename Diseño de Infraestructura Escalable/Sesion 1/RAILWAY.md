@@ -4,6 +4,8 @@ Guía para publicar **backend** y **frontend** por separado. Perfil recomendado 
 
 Para **subir las imágenes a Docker Hub** (mismos Dockerfiles), ver [DOCKERHUB.md](./DOCKERHUB.md).
 
+El **Nginx del frontend** solo sirve la SPA; no hace proxy a un host `backend` (en Railway no existe y Nginx fallaba al arrancar). El cliente llama al API en la URL absoluta de `VITE_API_URL`.
+
 ## Resumen
 
 | Servicio   | Raíz en el repo (desde esta carpeta) | Dockerfile        |

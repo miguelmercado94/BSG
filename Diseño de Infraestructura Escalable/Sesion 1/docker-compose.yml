@@ -18,8 +18,9 @@ services:
     build:
       context: ./frontend-sesion1
       dockerfile: Dockerfile
+      # Navegador → API en el host (puerto publicado del backend). Sin proxy Nginx a "backend" (Railway no tiene ese hostname).
       args:
-        VITE_API_URL: /api
+        VITE_API_URL: http://127.0.0.1:8080
     container_name: docviz-frontend
     ports:
       - "3000:80"

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build estático (Vite) + nginx sirve SPA y proxea /api → backend
+# Build estático (Vite) + nginx sirve solo la SPA (sin proxy a "backend": falla en Railway).
 FROM node:22-alpine AS build
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN npm ci
 
 COPY . .
 
-# Misma base que en runtime: el proxy de nginx envía /api al backend
+# URL base del API en el navegador (obligatoria). Ej.: http://127.0.0.1:8080 (compose) o https://tu-api.up.railway.app
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=${VITE_API_URL}
 
