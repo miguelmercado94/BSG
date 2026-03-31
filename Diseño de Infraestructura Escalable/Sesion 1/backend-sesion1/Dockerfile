@@ -1,13 +1,16 @@
 # syntax=docker/dockerfile:1
-# DocViz API — Java 21 + Spring Boot (perfil Maven "local" = Ollama; para Gemini: build con -P"!local,develop")
+# DocViz API — Java 21 + Spring Boot
+# Perfil Maven: "local" = Ollama (por defecto) | "!local,develop" = Gemini (p. ej. Railway: --build-arg MAVEN_PROFILES='!local,develop')
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /src
 
+ARG MAVEN_PROFILES=local
+
 COPY pom.xml .
-RUN mvn -q -B -Plocal dependency:resolve -DskipTests
+RUN mvn -q -B "-P${MAVEN_PROFILES}" dependency:resolve -DskipTests
 
 COPY src ./src
-RUN mvn -q -B -DskipTests -Plocal package
+RUN mvn -q -B -DskipTests "-P${MAVEN_PROFILES}" package
 
 FROM eclipse-temurin:21-jre-alpine
 LABEL org.opencontainers.image.title="DocViz Backend" \
