@@ -25,10 +25,17 @@ export function clearUserId(): void {
 }
 
 function apiBase(): string {
+  const fromRuntime =
+    typeof window !== "undefined"
+      ? (window as Window & { __DOCVIZ_API_BASE__?: string }).__DOCVIZ_API_BASE__
+      : undefined;
+  if (fromRuntime != null && String(fromRuntime).trim() !== "") {
+    return String(fromRuntime).trim().replace(/\/$/, "");
+  }
   const v = import.meta.env.VITE_API_URL;
   if (v === undefined || v === "") {
     throw new Error(
-      "Falta VITE_API_URL: define en .env la URL base del API (p. ej. /api con el proxy de Vite en local)."
+      "Falta la URL del API: en Docker define BACKEND_URL (Railway); en local, VITE_API_URL en .env (p. ej. /api con el proxy de Vite).",
     );
   }
   return v.replace(/\/$/, "");

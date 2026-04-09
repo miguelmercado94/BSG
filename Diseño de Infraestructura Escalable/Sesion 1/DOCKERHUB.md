@@ -1,5 +1,7 @@
 # Publicar imágenes en Docker Hub
 
+Para **CI/CD automático** (GitHub Actions → Docker Hub → Railway al merge a `main`), ver [CI-RAILWAY.md](./CI-RAILWAY.md).
+
 ## Requisitos
 
 1. Cuenta en [Docker Hub](https://hub.docker.com).
@@ -10,6 +12,8 @@
    ```
 
 3. Ejecutar los comandos desde la carpeta **`Sesion 1`** (donde están `backend-sesion1/` y `frontend-sesion1/`).
+
+Si `docker push` falla con *denied*, *unauthorized* o *context canceled*, ejecuta de nuevo `docker login` y usa `-DockerHubUser` con **tu** ID de Docker Hub (debe coincidir con la cuenta con la que iniciaste sesión).
 
 ## Nombres de imagen
 
@@ -44,6 +48,18 @@ Frontend apuntando a un API en la nube (sustituye la URL):
 .\scripts\push-dockerhub.ps1 -DockerHubUser TU_USUARIO -MavenProfiles '!local,develop' -ViteApiUrl 'https://tu-api.up.railway.app'
 ```
 
+**Solo frontend** (sin reconstruir el backend): el build de Vite debe usar la URL **HTTPS pública del API** en Railway, **sin barra final**. Ejemplo del proyecto:
+
+```powershell
+.\scripts\push-frontend-dockerhub.ps1 -DockerHubUser TU_USUARIO
+```
+
+Por defecto el script usa `https://docviz-sesion1-backend-production.up.railway.app`. Para otra URL:
+
+```powershell
+.\scripts\push-frontend-dockerhub.ps1 -DockerHubUser TU_USUARIO -ViteApiUrl 'https://otro-api.up.railway.app'
+```
+
 ### Bash (Linux / macOS / Git Bash)
 
 ```bash
@@ -74,6 +90,13 @@ docker push TU_USUARIO/docviz-sesion1-backend:latest
 
 ```bash
 docker build --build-arg VITE_API_URL=/api -t TU_USUARIO/docviz-sesion1-frontend:latest -f frontend-sesion1/Dockerfile frontend-sesion1
+docker push TU_USUARIO/docviz-sesion1-frontend:latest
+```
+
+**Frontend** (producción Railway: el navegador llama al API por CORS; URL sin `/` al final):
+
+```bash
+docker build --build-arg VITE_API_URL=https://docviz-sesion1-backend-production.up.railway.app -t TU_USUARIO/docviz-sesion1-frontend:latest -f frontend-sesion1/Dockerfile frontend-sesion1
 docker push TU_USUARIO/docviz-sesion1-frontend:latest
 ```
 

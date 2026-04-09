@@ -19,13 +19,16 @@ __pycache__/
 
 # Clones locales (grandes; no versionar)
 context-masters/
+**/context-masters/
 
 # Environment & secrets
 .env
 .env.local
 .env.*.local
 backend-sesion1/application-local.properties
+**/backend-sesion1/application-local.properties
 .pinecone.local.properties
+**/backend-sesion1/.pinecone.local.properties
 
 # OS / IDE
 .DS_Store

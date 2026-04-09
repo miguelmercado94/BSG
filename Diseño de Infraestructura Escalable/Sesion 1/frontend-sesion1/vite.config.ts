@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 const apiProxy = {
   "/api": {
@@ -11,6 +11,10 @@ const apiProxy = {
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+  },
   server: {
     port: 5173,
     proxy: { ...apiProxy },

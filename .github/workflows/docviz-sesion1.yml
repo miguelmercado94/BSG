@@ -1,0 +1,128 @@
+# Tests en cada PR/push a main; en push a main además construye imágenes,
+# las sube a Docker Hub y dispara redeploy en Railway solo si tocó backend o frontend.
+name: DocViz Sesión 1
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: docviz-sesion1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SESION_ROOT: "Diseño de Infraestructura Escalable/Sesion 1"
+  # Build del frontend (URL pública del API). Ajusta si cambia el dominio del backend.
+  VITE_API_URL: "https://docviz-sesion1-backend-production.up.railway.app"
+
+jobs:
+  changes:
+    name: Detectar cambios (paths)
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'Diseño de Infraestructura Escalable/Sesion 1/backend-sesion1/**'
+            frontend:
+              - 'Diseño de Infraestructura Escalable/Sesion 1/frontend-sesion1/**'
+
+  test-backend:
+    name: Test backend (Maven)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: mvn test
+        working-directory: ${{ env.SESION_ROOT }}/backend-sesion1
+        run: mvn -B -q -P local test
+
+  test-frontend:
+    name: Test frontend (lint + vitest + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.SESION_ROOT }}/frontend-sesion1/package-lock.json
+      - name: npm ci && lint && test && build
+        working-directory: ${{ env.SESION_ROOT }}/frontend-sesion1
+        run: |
+          npm ci
+          npm run lint
+          npm run test
+          npm run build
+
+  docker-backend:
+    name: Docker Hub + Railway (backend)
+    needs: [changes, test-backend, test-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build & push
+        working-directory: ${{ env.SESION_ROOT }}
+        env:
+          IMG: ${{ secrets.DOCKERHUB_USERNAME }}/docviz-sesion1-backend:latest
+        run: |
+          docker build --build-arg "MAVEN_PROFILES=!local,develop" -t "$IMG" -f backend-sesion1/Dockerfile backend-sesion1
+          docker push "$IMG"
+      - name: Redeploy Railway (backend)
+        env:
+          HOOK: ${{ secrets.RAILWAY_DEPLOY_HOOK_BACKEND }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RAILWAY_DEPLOY_HOOK_BACKEND no definido; omite redeploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK"
+
+  docker-frontend:
+    name: Docker Hub + Railway (frontend)
+    needs: [changes, test-backend, test-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build & push
+        working-directory: ${{ env.SESION_ROOT }}
+        env:
+          IMG: ${{ secrets.DOCKERHUB_USERNAME }}/docviz-sesion1-frontend:latest
+          VITE_API_URL: ${{ env.VITE_API_URL }}
+        run: |
+          docker build --build-arg "VITE_API_URL=${VITE_API_URL}" -t "$IMG" -f frontend-sesion1/Dockerfile frontend-sesion1
+          docker push "$IMG"
+      - name: Redeploy Railway (frontend)
+        env:
+          HOOK: ${{ secrets.RAILWAY_DEPLOY_HOOK_FRONTEND }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RAILWAY_DEPLOY_HOOK_FRONTEND no definido; omite redeploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK"

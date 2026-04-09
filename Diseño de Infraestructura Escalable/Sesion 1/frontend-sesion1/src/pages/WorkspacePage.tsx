@@ -6,6 +6,7 @@ import { clearUserId, fetchFileContent, logoutSession, vectorChat, vectorIngestS
 
 import type { ConnectResponse, FolderStructureDto } from "../types";
 
+import { ChatMarkdown } from "../components/ChatMarkdown";
 import { FolderTree } from "../components/FolderTree";
 
 
@@ -506,9 +507,13 @@ export function WorkspacePage() {
 
           {selectedPath && <div className="path">{selectedPath}</div>}
 
-          {fileErr && <p className="error">{fileErr}</p>}
+          <div className="workspace__file-body">
 
-          {fileContent !== null && <pre className="file-preview">{fileContent}</pre>}
+            {fileErr && <p className="error">{fileErr}</p>}
+
+            {fileContent !== null && <pre className="file-preview">{fileContent}</pre>}
+
+          </div>
 
         </section>
 
@@ -517,6 +522,8 @@ export function WorkspacePage() {
         <aside className="panel workspace__panel workspace__panel--chat">
 
           <h2 className="workspace__panel-chat-title">Consulta</h2>
+
+          <div className="workspace__chat-scroll">
 
           {ingestLoading && ingestProgress && (
 
@@ -652,9 +659,41 @@ export function WorkspacePage() {
 
           )}
 
+          {chatErr && <p className="error workspace__chat-scroll-err">{chatErr}</p>}
 
+          {chatAns && (
 
-          <form className="chat-form mt" onSubmit={onChat}>
+            <div className="chat-answer">
+
+              <ChatMarkdown content={chatAns} />
+
+              {chatSources.length > 0 && (
+
+                <div className="chat-answer__sources">
+
+                  <span className="chat-answer__sources-label">Fuentes</span>
+
+                  <ul className="chat-answer__sources-list">
+
+                    {chatSources.map((s, i) => (
+
+                      <li key={`${i}-${s}`}>{s}</li>
+
+                    ))}
+
+                  </ul>
+
+                </div>
+
+              )}
+
+            </div>
+
+          )}
+
+          </div>
+
+          <form className="chat-form workspace__chat-composer" onSubmit={onChat}>
 
             <label className="field">
 
@@ -695,24 +734,6 @@ export function WorkspacePage() {
             </button>
 
           </form>
-
-          {chatErr && <p className="error">{chatErr}</p>}
-
-          {chatAns && (
-
-            <div className="chat-answer">
-
-              <p>{chatAns}</p>
-
-              {chatSources.length > 0 && (
-
-                <div className="small muted">Fuentes: {chatSources.join(" · ")}</div>
-
-              )}
-
-            </div>
-
-          )}
 
         </aside>
 
