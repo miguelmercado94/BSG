@@ -10,6 +10,8 @@ import com.bsg.docviz.service.GitRepositoryService;
 import com.bsg.docviz.service.SessionRegistry;
 import com.bsg.docviz.util.SourceTextExtractor;
 import com.bsg.docviz.util.TextChunker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -31,22 +33,27 @@ import java.util.function.Consumer;
 @Service
 public class VectorIngestService {
 
+    private static final Logger log = LoggerFactory.getLogger(VectorIngestService.class);
+
     /** Archivos a precargar por delante del actual (pila/cola acotada: 1 actual + 4 prefetch = 5). */
     private static final int PREFETCH_AHEAD = 4;
 
     private final VectorProperties props;
-    private final PineconeVectorClient pinecone;
+    private final EmbeddingClient embeddingClient;
+    private final VectorStore vectorStore;
     private final GitRepositoryService gitRepositoryService;
     private final SessionRegistry sessionRegistry;
 
     public VectorIngestService(
             VectorProperties props,
-            PineconeVectorClient pinecone,
+            EmbeddingClient embeddingClient,
+            VectorStore vectorStore,
             GitRepositoryService gitRepositoryService,
             SessionRegistry sessionRegistry
     ) {
         this.props = props;
-        this.pinecone = pinecone;
+        this.embeddingClient = embeddingClient;
+        this.vectorStore = vectorStore;
         this.gitRepositoryService = gitRepositoryService;
         this.sessionRegistry = sessionRegistry;
     }
@@ -56,6 +63,23 @@ public class VectorIngestService {
         String user = UserIdSanitizer.forFilesystem(CurrentUser.require());
         String label = s.getRootFolderLabel() != null ? s.getRootFolderLabel() : "repo";
         return user + "__" + label.replaceAll("[^a-zA-Z0-9._-]", "_");
+    }
+
+    /**
+     * Borra todos los vectores del namespace del repo actual (equivalente a vaciar namespace en Pinecone).
+     */
+    public String clearCurrentNamespaceIndex() {
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        var session = sessionRegistry.current();
+        if (!session.isConnected()) {
+            throw new IllegalStateException("Not connected to a repository");
+        }
+        String ns = currentNamespace();
+        vectorStore.deleteAllInNamespace(ns);
+        log.info("Índice vectorial vaciado para namespace={} (store={})", ns, vectorStore.getClass().getSimpleName());
+        return ns;
     }
 
     public VectorIngestResponse ingestAll() {
@@ -84,7 +108,6 @@ public class VectorIngestService {
         FileContentCache blobCache = session.getIngestContentCache();
         String rev = session.getRevisionSpec();
         String ns = currentNamespace();
-        String indexHost = pinecone.getIndexHost();
         String userLabel = CurrentUser.require().trim();
 
         List<String> paths;
@@ -107,17 +130,38 @@ public class VectorIngestService {
             }
         }
         int totalIndexable = indexable.size();
+        log.info(
+                "Vector ingest start: user={}, namespace={}, indexableFiles={}, revision={}",
+                userLabel,
+                ns,
+                totalIndexable,
+                rev);
+        log.info(
+                "Vector ingest config: store={}, embeddingsProvider={}, embeddingDim={}, embedChunkBatchSize={}, "
+                        + "vectorStore={}, embeddingClient={}",
+                props.getStore(),
+                props.getEmbeddingsProvider(),
+                props.getEmbeddingDimensions(),
+                props.getEmbedChunkBatchSize(),
+                vectorStore.getClass().getSimpleName(),
+                embeddingClient.getClass().getSimpleName());
         if (onProgress != null) {
             onProgress.accept(IngestProgressDto.start(totalIndexable));
         }
 
         int files = 0;
         int chunks = 0;
-        List<PineconeVectorClient.VectorRecord> batch = new ArrayList<>();
+        List<VectorRecord> batch = new ArrayList<>();
 
+        // Hilos virtuales (Java 21+) evitados aquí: en JRE 17 o bytecode mezclado provoca
+        // "newVirtualThreadPerTaskExecutor() is undefined". Cached pool es compatible y suficiente para prefetch.
         ExecutorService prefetchPool = props.isPrefetchUsePlatformThreads()
                 ? Executors.newFixedThreadPool(Math.min(PREFETCH_AHEAD, 4))
-                : Executors.newVirtualThreadPerTaskExecutor();
+                : Executors.newCachedThreadPool(r -> {
+                    Thread t = new Thread(r, "docviz-prefetch");
+                    t.setDaemon(true);
+                    return t;
+                });
         try {
             for (int i = 0; i < indexable.size(); i++) {
                 String rel = indexable.get(i);
@@ -142,13 +186,18 @@ public class VectorIngestService {
                         continue;
                     }
                     List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
+                    log.info(
+                            "Ingest file {}/{}: {} ({} chunks)",
+                            i + 1,
+                            totalIndexable,
+                            rel,
+                            parts.size());
                     String displaySource = session.getRootFolderLabel() + "/" + rel;
                     int[] chunksRef = new int[] {chunks};
                     appendEmbeddingsForParts(
                             parts,
                             displaySource,
                             ns,
-                            indexHost,
                             userLabel,
                             totalIndexable,
                             files,
@@ -162,6 +211,7 @@ public class VectorIngestService {
                         onProgress.accept(IngestProgressDto.progress(totalIndexable, files, chunks, rel));
                     }
                 } catch (RuntimeException ex) {
+                    log.error("Vector ingest: error al procesar {} — {}", rel, ex.toString(), ex);
                     skipped.add(rel + ": " + ex.getMessage());
                 } finally {
                     blobCache.remove(rel);
@@ -182,7 +232,8 @@ public class VectorIngestService {
             }
         }
         if (!batch.isEmpty()) {
-            pinecone.upsertBatch(indexHost, ns, batch);
+            log.info("Vector ingest: volcando lote final a almacén ({} filas pendientes)", batch.size());
+            flushVectorBatch(ns, batch);
         }
 
         VectorIngestResponse r = new VectorIngestResponse();
@@ -190,6 +241,12 @@ public class VectorIngestService {
         r.setChunksIndexed(chunks);
         r.setSkipped(skipped);
         r.setNamespace(ns);
+        log.info(
+                "Vector ingest done: namespace={}, filesProcessed={}, chunksIndexed={}, skippedLines={}",
+                ns,
+                files,
+                chunks,
+                skipped.size());
         if (onProgress != null) {
             onProgress.accept(IngestProgressDto.done(r));
         }
@@ -223,7 +280,6 @@ public class VectorIngestService {
         }
 
         String ns = currentNamespace();
-        String indexHost = pinecone.getIndexHost();
         String userLabel = CurrentUser.require().trim();
         String displaySource = "classpath:" + resourcePath;
         int totalIndexable = 1;
@@ -237,7 +293,7 @@ public class VectorIngestService {
         }
 
         List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
-        List<PineconeVectorClient.VectorRecord> batch = new ArrayList<>();
+        List<VectorRecord> batch = new ArrayList<>();
         int files = 0;
         int chunks = 0;
         int[] chunksRef = new int[] {0};
@@ -245,7 +301,6 @@ public class VectorIngestService {
                 parts,
                 displaySource,
                 ns,
-                indexHost,
                 userLabel,
                 totalIndexable,
                 0,
@@ -259,7 +314,7 @@ public class VectorIngestService {
             onProgress.accept(IngestProgressDto.progress(totalIndexable, files, chunks, resourcePath));
         }
         if (!batch.isEmpty()) {
-            pinecone.upsertBatch(indexHost, ns, batch);
+            flushVectorBatch(ns, batch);
         }
 
         VectorIngestResponse r = new VectorIngestResponse();
@@ -273,6 +328,25 @@ public class VectorIngestService {
         return r;
     }
 
+    /** Escribe un lote al {@link VectorStore} con logs y manejo de error explícito. */
+    private void flushVectorBatch(String ns, List<VectorRecord> batch) {
+        int n = batch.size();
+        try {
+            log.info(
+                    "Almacén vectorial: upsert de {} filas (namespace={}, store={})",
+                    n,
+                    ns,
+                    vectorStore.getClass().getSimpleName());
+            vectorStore.upsertBatch(ns, batch);
+            log.info("Almacén vectorial: upsert correcto — {} filas (namespace={})", n, ns);
+        } catch (RuntimeException e) {
+            log.error("Almacén vectorial: upsert falló — {} filas, namespace={}", n, ns, e);
+            throw e;
+        }
+        batch.clear();
+        sleepDelay();
+    }
+
     private void sleepDelay() {
         try {
             Thread.sleep(props.getEmbedBatchDelayMs());
@@ -282,36 +356,91 @@ public class VectorIngestService {
     }
 
     /**
-     * Agrupa varios chunks por petición HTTP a Pinecone {@code /embed}. Actualiza {@code chunksRef[0]} (total de chunks indexados).
+     * Agrupa varios chunks por petición de embeddings. Actualiza {@code chunksRef[0]} (total de chunks indexados).
      */
     private void appendEmbeddingsForParts(
             List<String> parts,
             String displaySource,
             String ns,
-            String indexHost,
             String userLabel,
             int totalIndexable,
             int filesIndexedSoFar,
             String progressRel,
             Consumer<IngestProgressDto> onProgress,
-            List<PineconeVectorClient.VectorRecord> batch,
+            List<VectorRecord> batch,
             int[] chunksRef
     ) {
         int embedBatch = Math.max(1, props.getEmbedChunkBatchSize());
         int totalParts = parts.size();
+        if (totalParts > 80) {
+            log.warn(
+                    "Archivo con muchos fragmentos ({}): {} — Ollama procesará por lotes; la UI puede avanzar lento entre lotes.",
+                    totalParts,
+                    progressRel);
+        }
         for (int start = 0; start < totalParts; start += embedBatch) {
             int end = Math.min(start + embedBatch, totalParts);
             List<String> slice = parts.subList(start, end);
-            List<float[]> embeddings = pinecone.embedTexts(slice);
+            if (onProgress != null) {
+                IngestProgressDto heartbeat = IngestProgressDto.progress(
+                        totalIndexable, filesIndexedSoFar, chunksRef[0], progressRel);
+                heartbeat.setDetail(
+                        "Generando embeddings (lote "
+                                + (start + 1)
+                                + "–"
+                                + end
+                                + " de "
+                                + totalParts
+                                + ")… puede tardar si el archivo es grande.");
+                onProgress.accept(heartbeat);
+            }
+            log.info(
+                    "Ollama embeddings: {} textos, archivo {}, fragmentos {}..{} de {}",
+                    slice.size(),
+                    progressRel,
+                    start + 1,
+                    end,
+                    totalParts);
+            long t0 = System.nanoTime();
+            List<float[]> embeddings;
+            try {
+                embeddings = embeddingClient.embedTexts(slice);
+            } catch (RuntimeException e) {
+                log.error(
+                        "embedTexts falló: archivo={}, fragmentos {}..{}/{}, batchEmbeds={}",
+                        progressRel,
+                        start + 1,
+                        end,
+                        totalParts,
+                        embedBatch,
+                        e);
+                throw e;
+            }
+            long embedMs = (System.nanoTime() - t0) / 1_000_000L;
+            log.info("Ollama embeddings listo en {} ms ({} vectores)", embedMs, embeddings.size());
             if (embeddings.size() != slice.size()) {
+                log.error(
+                        "Conteo de embeddings incorrecto: esperados {} vectores, obtuve {} (archivo={})",
+                        slice.size(),
+                        embeddings.size(),
+                        progressRel);
                 throw new IllegalStateException(
-                        "Pinecone embed: esperados " + slice.size() + " vectores, obtuve " + embeddings.size());
+                        "Embedding: esperados " + slice.size() + " vectores, obtuve " + embeddings.size());
             }
             for (int j = 0; j < embeddings.size(); j++) {
                 int chunkIdx = start + j;
                 float[] v = embeddings.get(j);
-                String id = ns + ":" + UUID.randomUUID();
-                batch.add(new PineconeVectorClient.VectorRecord(id, v, displaySource, chunkIdx, userLabel));
+                if (v != null && v.length != props.getEmbeddingDimensions()) {
+                    log.error(
+                            "Dimensión de vector inesperada: {} != docviz.vector.embedding-dimensions={} (archivo={}, chunk {})",
+                            v.length,
+                            props.getEmbeddingDimensions(),
+                            progressRel,
+                            chunkIdx);
+                }
+                // id solo UUID: ns + ":" + uuid superaba VARCHAR(128) con namespaces largos y el INSERT fallaba sin log claro.
+                String id = UUID.randomUUID().toString();
+                batch.add(new VectorRecord(id, v, displaySource, chunkIdx, userLabel));
                 chunksRef[0]++;
                 int oneBased = chunkIdx + 1;
                 if (onProgress != null && shouldEmitChunkProgress(oneBased, totalParts)) {
@@ -319,10 +448,23 @@ public class VectorIngestService {
                             IngestProgressDto.progress(totalIndexable, filesIndexedSoFar, chunksRef[0], progressRel));
                 }
                 if (batch.size() >= 16) {
-                    pinecone.upsertBatch(indexHost, ns, batch);
-                    batch.clear();
-                    sleepDelay();
+                    flushVectorBatch(ns, batch);
                 }
+            }
+            if (onProgress != null) {
+                IngestProgressDto afterBatch =
+                        IngestProgressDto.progress(totalIndexable, filesIndexedSoFar, chunksRef[0], progressRel);
+                afterBatch.setDetail(
+                        "Embeddings listos: fragmentos "
+                                + (start + 1)
+                                + "–"
+                                + end
+                                + " de "
+                                + totalParts
+                                + " ("
+                                + embedMs
+                                + " ms en llamada Ollama)");
+                onProgress.accept(afterBatch);
             }
         }
     }
@@ -377,13 +519,127 @@ public class VectorIngestService {
         }
     }
 
+    /**
+     * Extensiones y nombres de archivo que se intentan indexar. Si un repo usa solo lenguajes no listados,
+     * todo queda en "tipo no indexable" y la ingesta termina en 0 archivos.
+     */
     private static boolean isIndexablePath(String rel) {
+        if (rel == null || rel.isBlank()) {
+            return false;
+        }
         String lower = rel.toLowerCase(Locale.ROOT);
-        return lower.endsWith(".java") || lower.endsWith(".kt") || lower.endsWith(".xml")
-                || lower.endsWith(".properties") || lower.endsWith(".yml") || lower.endsWith(".yaml")
-                || lower.endsWith(".json") || lower.endsWith(".md") || lower.endsWith(".txt")
-                || lower.endsWith(".sql") || lower.endsWith(".gradle") || lower.endsWith(".pdf")
-                || lower.endsWith(".ts") || lower.endsWith(".tsx") || lower.endsWith(".js") || lower.endsWith(".jsx")
-                || lower.endsWith(".html") || lower.endsWith(".css") || lower.endsWith(".cob");
+        int slash = Math.max(lower.lastIndexOf('/'), lower.lastIndexOf('\\'));
+        String base = slash >= 0 ? lower.substring(slash + 1) : lower;
+        if (base.equals("dockerfile")
+                || base.equals("makefile")
+                || base.equals("jenkinsfile")
+                || base.equals("rakefile")
+                || base.equals("gemfile")
+                || base.equals(".gitignore")
+                || base.equals(".dockerignore")
+                || base.equals("readme")) {
+            return true;
+        }
+        return lower.endsWith(".java")
+                || lower.endsWith(".kt")
+                || lower.endsWith(".kts")
+                || lower.endsWith(".xml")
+                || lower.endsWith(".properties")
+                || lower.endsWith(".yml")
+                || lower.endsWith(".yaml")
+                || lower.endsWith(".json")
+                || lower.endsWith(".jsonc")
+                || lower.endsWith(".md")
+                || lower.endsWith(".mdx")
+                || lower.endsWith(".txt")
+                || lower.endsWith(".sql")
+                || lower.endsWith(".gradle")
+                || lower.endsWith(".pdf")
+                || lower.endsWith(".ts")
+                || lower.endsWith(".tsx")
+                || lower.endsWith(".mts")
+                || lower.endsWith(".cts")
+                || lower.endsWith(".js")
+                || lower.endsWith(".jsx")
+                || lower.endsWith(".mjs")
+                || lower.endsWith(".cjs")
+                || lower.endsWith(".html")
+                || lower.endsWith(".htm")
+                || lower.endsWith(".css")
+                || lower.endsWith(".scss")
+                || lower.endsWith(".sass")
+                || lower.endsWith(".less")
+                || lower.endsWith(".vue")
+                || lower.endsWith(".svelte")
+                || lower.endsWith(".cob")
+                || lower.endsWith(".cpy")
+                || lower.endsWith(".cbl")
+                // JVM / Android
+                || lower.endsWith(".groovy")
+                || lower.endsWith(".scala")
+                || lower.endsWith(".clj")
+                || lower.endsWith(".cljs")
+                // Go, Rust, Zig, etc.
+                || lower.endsWith(".go")
+                || lower.endsWith(".mod")
+                || lower.endsWith(".sum")
+                || lower.endsWith(".rs")
+                || lower.endsWith(".zig")
+                // C / C++
+                || lower.endsWith(".c")
+                || lower.endsWith(".h")
+                || lower.endsWith(".cc")
+                || lower.endsWith(".cpp")
+                || lower.endsWith(".cxx")
+                || lower.endsWith(".hpp")
+                || lower.endsWith(".hh")
+                // Python, Ruby, PHP, etc.
+                || lower.endsWith(".py")
+                || lower.endsWith(".pyi")
+                || lower.endsWith(".pyw")
+                || lower.endsWith(".rb")
+                || lower.endsWith(".erb")
+                || lower.endsWith(".php")
+                // .NET
+                || lower.endsWith(".cs")
+                || lower.endsWith(".fs")
+                || lower.endsWith(".vb")
+                // Swift / ObjC
+                || lower.endsWith(".swift")
+                || lower.endsWith(".m")
+                || lower.endsWith(".mm")
+                // Shell / scripts
+                || lower.endsWith(".sh")
+                || lower.endsWith(".bash")
+                || lower.endsWith(".zsh")
+                || lower.endsWith(".ps1")
+                || lower.endsWith(".psm1")
+                || lower.endsWith(".bat")
+                || lower.endsWith(".cmd")
+                // Config / datos
+                || lower.endsWith(".toml")
+                || lower.endsWith(".ini")
+                || lower.endsWith(".cfg")
+                || lower.endsWith(".editorconfig")
+                || lower.endsWith(".env.example")
+                || lower.endsWith(".graphql")
+                || lower.endsWith(".gql")
+                || lower.endsWith(".proto")
+                // Otros lenguajes frecuentes en monorepos
+                || lower.endsWith(".dart")
+                || lower.endsWith(".elm")
+                || lower.endsWith(".ex")
+                || lower.endsWith(".exs")
+                || lower.endsWith(".erl")
+                || lower.endsWith(".hrl")
+                || lower.endsWith(".lua")
+                || lower.endsWith(".pl")
+                || lower.endsWith(".pm")
+                || lower.endsWith(".r")
+                || lower.endsWith(".nim")
+                || lower.endsWith(".v")
+                || lower.endsWith(".sol")
+                || lower.endsWith(".tf")
+                || lower.endsWith(".hcl");
     }
 }

@@ -5,6 +5,23 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "docviz.vector")
 public class VectorProperties {
 
+    /**
+     * Almacén de vectores: {@code pgvector} (PostgreSQL + extensión pgvector) o {@code pinecone} (API HTTP legada).
+     */
+    private String store = "pgvector";
+
+    /**
+     * Origen de los vectores de embedding: {@code spring-ollama} (Spring AI + Ollama, recomendado con pgvector) o
+     * {@code pinecone-inference} (API HTTP de inferencia Pinecone; requiere PINECONE_API_KEY).
+     */
+    private String embeddingsProvider = "spring-ollama";
+
+    /**
+     * Dimensión del vector de embedding (debe coincidir con el modelo; p. ej. nomic-embed-text → 768).
+     * Solo aplica a {@code store=pgvector} (DDL de la columna {@code vector(dim)}).
+     */
+    private int embeddingDimensions = 768;
+
     private boolean enabled = true;
     private String pineconeApiKey = "";
     private String pineconeIndexName = "docviz-embed";
@@ -22,8 +39,9 @@ public class VectorProperties {
      */
     private int embedChunkBatchSize = 32;
     /**
-     * Si true, el prefetch de ingesta usa un pool de hilos de plataforma (más lento, menos sorpresas en Docker/JRE viejos).
-     * Si false, usa {@link java.util.concurrent.Executors#newVirtualThreadPerTaskExecutor()}.
+     * Si true, el prefetch de ingesta usa un pool fijo de hilos de plataforma.
+     * Si false, usa un {@link java.util.concurrent.Executors#newCachedThreadPool(ThreadFactory)} con hilos daemon
+     * (compatible con Java 17+; los hilos virtuales solo en JRE 21 no se usan aquí para evitar errores de runtime).
      */
     private boolean prefetchUsePlatformThreads = false;
     private int chunkSize = 800;
@@ -36,6 +54,37 @@ public class VectorProperties {
     private boolean ingestClasspathSampleOnly = false;
     /** Ruta bajo {@code src/main/resources} (p. ej. {@code test_gemini_key.py}). */
     private String classpathSampleResource = "test_gemini_key.py";
+
+    public String getStore() {
+        return store;
+    }
+
+    public void setStore(String store) {
+        this.store = store != null ? store.trim().toLowerCase() : "pgvector";
+    }
+
+    public String getEmbeddingsProvider() {
+        return embeddingsProvider;
+    }
+
+    public void setEmbeddingsProvider(String embeddingsProvider) {
+        this.embeddingsProvider =
+                embeddingsProvider != null ? embeddingsProvider.trim().toLowerCase() : "spring-ollama";
+    }
+
+    public int getEmbeddingDimensions() {
+        return embeddingDimensions;
+    }
+
+    public void setEmbeddingDimensions(int embeddingDimensions) {
+        int d = embeddingDimensions;
+        if (d < 64) {
+            d = 64;
+        } else if (d > 4096) {
+            d = 4096;
+        }
+        this.embeddingDimensions = d;
+    }
 
     public boolean isEnabled() {
         return enabled;

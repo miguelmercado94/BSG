@@ -1,0 +1,3 @@
+# Solo para scripts/cleanup_dev_data.py (limpieza local)
+psycopg2-binary>=2.9.9
+google-cloud-firestore>=2.16.0

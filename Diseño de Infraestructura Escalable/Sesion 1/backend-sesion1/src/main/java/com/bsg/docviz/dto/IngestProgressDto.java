@@ -12,6 +12,8 @@ public class IngestProgressDto {
     private Integer filesProcessed;
     private Integer chunksIndexed;
     private String currentFile;
+    /** Mensaje breve opcional (p. ej. mientras Ollama genera embeddings). */
+    private String detail;
     private String namespace;
     private List<String> skipped;
     private String error;
@@ -101,6 +103,14 @@ public class IngestProgressDto {
 
     public void setCurrentFile(String currentFile) {
         this.currentFile = currentFile;
+    }
+
+    public String getDetail() {
+        return detail;
+    }
+
+    public void setDetail(String detail) {
+        this.detail = detail;
     }
 
     public String getNamespace() {

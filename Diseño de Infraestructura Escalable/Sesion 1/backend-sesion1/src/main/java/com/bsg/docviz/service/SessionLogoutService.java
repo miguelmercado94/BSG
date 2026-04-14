@@ -3,7 +3,7 @@ package com.bsg.docviz.service;
 import com.bsg.docviz.config.DocvizProperties;
 import com.bsg.docviz.config.VectorProperties;
 import com.bsg.docviz.security.CurrentUser;
-import com.bsg.docviz.vector.PineconeVectorClient;
+import com.bsg.docviz.vector.VectorStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -16,7 +16,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 
 /**
- * Cierra la sesión DocViz: borra vectores Pinecone del namespace del repo actual, la carpeta
+ * Cierra la sesión DocViz: borra vectores del namespace del repo actual, la carpeta
  * {@code context-masters/&lt;usuario&gt;/} y el estado en memoria.
  */
 @Service
@@ -27,18 +27,18 @@ public class SessionLogoutService {
     private final SessionRegistry sessionRegistry;
     private final DocvizProperties docvizProperties;
     private final VectorProperties vectorProperties;
-    private final PineconeVectorClient pineconeVectorClient;
+    private final VectorStore vectorStore;
 
     public SessionLogoutService(
             SessionRegistry sessionRegistry,
             DocvizProperties docvizProperties,
             VectorProperties vectorProperties,
-            PineconeVectorClient pineconeVectorClient
+            VectorStore vectorStore
     ) {
         this.sessionRegistry = sessionRegistry;
         this.docvizProperties = docvizProperties;
         this.vectorProperties = vectorProperties;
-        this.pineconeVectorClient = pineconeVectorClient;
+        this.vectorStore = vectorStore;
     }
 
     public void logout() {
@@ -48,9 +48,9 @@ public class SessionLogoutService {
         if (st != null && vectorProperties.isEnabled() && st.isConnected()) {
             String ns = namespaceForSession(st, userKey);
             try {
-                pineconeVectorClient.deleteAllVectorsInNamespace(pineconeVectorClient.getIndexHost(), ns);
+                vectorStore.deleteAllInNamespace(ns);
             } catch (RuntimeException e) {
-                log.warn("No se pudo vaciar Pinecone namespace {}: {}", ns, e.getMessage());
+                log.warn("No se pudo vaciar el índice vectorial (namespace {}): {}", ns, e.getMessage());
             }
         }
 

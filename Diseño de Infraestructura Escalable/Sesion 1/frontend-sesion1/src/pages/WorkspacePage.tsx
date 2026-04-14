@@ -2,16 +2,28 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { clearUserId, fetchFileContent, logoutSession, vectorChat, vectorIngestStream } from "../api/client";
+import {
+  clearUserId,
+  fetchChatHistory,
+  fetchFileContent,
+  logoutSession,
+  vectorChat,
+  vectorClearIndex,
+  vectorIngestStream,
+} from "../api/client";
 
-import type { ConnectResponse, FolderStructureDto } from "../types";
+import type { ChatHistoryEntry, ConnectResponse, FolderStructureDto } from "../types";
 
 import { ChatMarkdown } from "../components/ChatMarkdown";
 import { FolderTree } from "../components/FolderTree";
+import { SupportPanel } from "../components/SupportPanel";
+import { useSupportDocuments } from "../hooks/useSupportDocuments";
 
 
 
 type LocationState = { connect?: ConnectResponse; selectedTags?: string[] };
+
+type FileViewSource = "repo" | "support";
 
 
 
@@ -117,15 +129,20 @@ export function WorkspacePage() {
 
     currentFile: string | null;
 
+    detail: string | null;
+
+    /** stream = NDJSON con progreso por archivo; sync reservado si en el futuro se usa ingesta sin stream */
+    mode: "sync" | "stream";
+
   } | null>(null);
 
 
 
   const [question, setQuestion] = useState("");
 
-  const [chatAns, setChatAns] = useState<string | null>(null);
+  const [chatTurns, setChatTurns] = useState<ChatHistoryEntry[]>([]);
 
-  const [chatSources, setChatSources] = useState<string[]>([]);
+  const [chatHistoryErr, setChatHistoryErr] = useState<string | null>(null);
 
   const [chatErr, setChatErr] = useState<string | null>(null);
 
@@ -135,9 +152,31 @@ export function WorkspacePage() {
 
   const [logoutErr, setLogoutErr] = useState<string | null>(null);
 
+  const [ingestRetry, setIngestRetry] = useState(0);
+
+  const [clearLoading, setClearLoading] = useState(false);
+
+  const [clearErr, setClearErr] = useState<string | null>(null);
+
+
+
+  const [fileViewSource, setFileViewSource] = useState<FileViewSource>("repo");
+
+  const [selectedSupportId, setSelectedSupportId] = useState<string | null>(null);
+
+  const [supportEditing, setSupportEditing] = useState(false);
+
+  const [supportDraft, setSupportDraft] = useState("");
+
 
 
   const filePreviewLru = useRef<Map<string, string>>(new Map());
+
+
+
+  const { docs: supportDocs, add: addSupportDoc, update: updateSupportDoc, remove: removeSupportDoc } =
+
+    useSupportDocuments(connect?.usuario ?? "");
 
 
 
@@ -153,6 +192,22 @@ export function WorkspacePage() {
 
 
 
+  useEffect(() => {
+
+    if (selectedSupportId && !supportDocs.some((d) => d.id === selectedSupportId)) {
+
+      setSelectedSupportId(null);
+
+      setFileViewSource("repo");
+
+      setSupportEditing(false);
+
+    }
+
+  }, [supportDocs, selectedSupportId]);
+
+
+
   /** Ingesta automática al mostrar el contexto maestro (una vez por carga del workspace). */
 
   useEffect(() => {
@@ -160,6 +215,8 @@ export function WorkspacePage() {
     if (!connect?.directory) return;
 
     let cancelled = false;
+
+    const abortIngest = new AbortController();
 
     setIngestErr(null);
 
@@ -169,101 +226,122 @@ export function WorkspacePage() {
 
     setIngestLoading(true);
 
-    setIngestProgress({ totalFiles: 0, filesProcessed: 0, chunksIndexed: 0, currentFile: null });
+    setIngestProgress({
+      totalFiles: 0,
+      filesProcessed: 0,
+      chunksIndexed: 0,
+      currentFile: null,
+      detail: null,
+      mode: "stream",
+    });
 
     async function runAutoIngest() {
 
       try {
 
-        const r = await vectorIngestStream((ev) => {
-
-          if (cancelled) return;
-
-          if (ev.phase === "START" && ev.totalFiles != null) {
-
-            setIngestProgress({
-
-              totalFiles: ev.totalFiles,
-
-              filesProcessed: 0,
-
-              chunksIndexed: 0,
-
-              currentFile: null,
-
-            });
-
-          }
-
-          if (ev.phase === "FILE" || ev.phase === "PROGRESS") {
-
-            setIngestProgress((prev) => ({
-
-              totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
-
-              filesProcessed: ev.filesProcessed ?? 0,
-
-              chunksIndexed: ev.chunksIndexed ?? 0,
-
-              currentFile: ev.currentFile ?? null,
-
-            }));
-
-          }
-
-        });
+        const r = await vectorIngestStream(
+          (ev) => {
+            if (cancelled) return;
+            if (ev.phase === "START" && ev.totalFiles != null) {
+              setIngestProgress({
+                totalFiles: ev.totalFiles,
+                filesProcessed: 0,
+                chunksIndexed: 0,
+                currentFile: null,
+                detail: null,
+                mode: "stream",
+              });
+            }
+            if (ev.phase === "FILE" || ev.phase === "PROGRESS") {
+              setIngestProgress((prev) => ({
+                totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
+                filesProcessed: ev.filesProcessed ?? 0,
+                chunksIndexed: ev.chunksIndexed ?? 0,
+                currentFile: ev.currentFile ?? null,
+                detail: ev.detail ?? null,
+                mode: "stream",
+              }));
+            }
+          },
+          { signal: abortIngest.signal },
+        );
 
         if (cancelled) return;
 
         setIngestResult({
-
           filesProcessed: r.filesProcessed,
-
           chunksIndexed: r.chunksIndexed,
-
           namespace: r.namespace,
-
           skipped: r.skipped ?? [],
-
         });
 
         setIngestComplete(true);
-
       } catch (e) {
-
         if (cancelled) return;
-
+        if (e instanceof Error && e.name === "AbortError") return;
         setIngestErr(e instanceof Error ? e.message : String(e));
-
       } finally {
-
         if (!cancelled) {
-
           setIngestLoading(false);
-
           setIngestProgress(null);
-
         }
-
       }
-
     }
-
-
 
     void runAutoIngest();
 
     return () => {
-
       cancelled = true;
-
+      abortIngest.abort();
     };
+  }, [connect?.directory, ingestRetry]);
 
-  }, [connect?.directory]);
+
+
+  /** Historial RAG desde Firestore (mismo usuario que X-DocViz-User). */
+  useEffect(() => {
+    if (!ingestComplete) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setChatHistoryErr(null);
+        const rows = await fetchChatHistory(50);
+        if (!cancelled) setChatTurns(rows);
+      } catch (e) {
+        if (!cancelled) {
+          setChatHistoryErr(e instanceof Error ? e.message : String(e));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ingestComplete, ingestRetry]);
+
+
+
+  async function onClearVectorIndex() {
+    setClearErr(null);
+    setClearLoading(true);
+    try {
+      await vectorClearIndex();
+      setIngestRetry((n) => n + 1);
+    } catch (e) {
+      setClearErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClearLoading(false);
+    }
+  }
 
 
 
   async function onSelectFile(rel: string) {
+
+    setFileViewSource("repo");
+
+    setSelectedSupportId(null);
+
+    setSupportEditing(false);
 
     setSelectedPath(rel);
 
@@ -294,6 +372,106 @@ export function WorkspacePage() {
       setFileErr(e instanceof Error ? e.message : String(e));
 
     }
+
+  }
+
+
+
+  function onSelectSupport(id: string) {
+
+    setFileViewSource("support");
+
+    setSelectedSupportId(id);
+
+    setSelectedPath(null);
+
+    setFileContent(null);
+
+    setFileErr(null);
+
+    setSupportEditing(false);
+
+    const doc = supportDocs.find((d) => d.id === id);
+
+    setSupportDraft(doc?.content ?? "");
+
+  }
+
+
+
+  function handleSupportUpload(fileName: string, content: string) {
+
+    const id = addSupportDoc(fileName, content);
+
+    setFileViewSource("support");
+
+    setSelectedSupportId(id);
+
+    setSelectedPath(null);
+
+    setFileContent(null);
+
+    setFileErr(null);
+
+    setSupportEditing(false);
+
+    setSupportDraft(content);
+
+  }
+
+
+
+  function handleSupportDelete(id: string) {
+
+    removeSupportDoc(id);
+
+    if (selectedSupportId === id) {
+
+      setSelectedSupportId(null);
+
+      setFileViewSource("repo");
+
+      setSupportEditing(false);
+
+    }
+
+  }
+
+
+
+  function startSupportEdit() {
+
+    const doc = supportDocs.find((d) => d.id === selectedSupportId);
+
+    if (!doc) return;
+
+    setSupportDraft(doc.content);
+
+    setSupportEditing(true);
+
+  }
+
+
+
+  function saveSupportEdit() {
+
+    if (!selectedSupportId) return;
+
+    updateSupportDoc(selectedSupportId, supportDraft);
+
+    setSupportEditing(false);
+
+  }
+
+
+
+  function cancelSupportEdit() {
+
+    const doc = supportDocs.find((d) => d.id === selectedSupportId);
+
+    setSupportDraft(doc?.content ?? "");
+
+    setSupportEditing(false);
 
   }
 
@@ -335,21 +513,59 @@ export function WorkspacePage() {
 
     setChatErr(null);
 
-    setChatAns(null);
+    const q = question.trim();
 
-    setChatSources([]);
-
-    if (!question.trim()) return;
+    if (!q) return;
 
     setChatLoading(true);
 
     try {
 
-      const r = await vectorChat(question.trim());
+      const res = await vectorChat(q);
 
-      setChatAns(r.answer);
+      setQuestion("");
 
-      setChatSources(r.sources ?? []);
+      const localTurn = (id: string): ChatHistoryEntry => ({
+
+        id,
+
+        question: q,
+
+        answer: res.answer,
+
+        sources: res.sources ?? [],
+
+        repoLabel: "",
+
+        createdAt: new Date().toISOString(),
+
+      });
+
+      try {
+
+        const rows = await fetchChatHistory(50);
+
+        setChatHistoryErr(null);
+
+        if (rows.length > 0) {
+
+          setChatTurns(rows);
+
+        } else {
+
+          // Sin Firestore o aún sin documentos: la UI solo leía historial vacío y ocultaba la respuesta del POST.
+
+          setChatTurns((prev) => [...prev, localTurn(`local-${Date.now()}`)]);
+
+        }
+
+      } catch (histErr) {
+
+        setChatHistoryErr(histErr instanceof Error ? histErr.message : String(histErr));
+
+        setChatTurns((prev) => [...prev, localTurn(`local-${Date.now()}`)]);
+
+      }
 
     } catch (err) {
 
@@ -391,149 +607,167 @@ export function WorkspacePage() {
 
 
 
+  const selectedSupportDoc =
+
+    selectedSupportId != null ? supportDocs.find((d) => d.id === selectedSupportId) : undefined;
+
+
+
+  const headerFileLabel =
+
+    fileViewSource === "support" && selectedSupportDoc
+
+      ? selectedSupportDoc.name
+
+      : selectedPath?.trim()
+
+        ? basenameRel(selectedPath)
+
+        : null;
+
+
+
+  const headerFileTitle =
+
+    fileViewSource === "support" && selectedSupportDoc
+
+      ? `Soporte · ${selectedSupportDoc.name}`
+
+      : selectedPath?.trim()
+
+        ? selectedPath
+
+        : undefined;
+
+
+
   return (
 
     <div className="page page--workspace workspace">
 
-      <header className="workspace__bar workspace__bar--minimal workspace__bar--with-actions">
+      <header className="workspace__bar workspace__bar--with-actions workspace__bar--ingest-fullwidth">
 
-        <div className="workspace__bar-col workspace__bar-row--header-main">
+        <div className="workspace__bar-top">
 
-          <span className="workspace__header-user">{connect.usuario}</span>
+          <div className="workspace__bar-col workspace__bar-row--header-main workspace__bar-col--main workspace__bar-col--header-text">
 
-          <span
+            <span className="workspace__header-user">{connect.usuario}</span>
 
-            className={
-              selectedPath?.trim()
-                ? "workspace__header-file muted"
-                : "workspace__header-session-hint muted"
-            }
+            <span
 
-            title={selectedPath?.trim() ? selectedPath : undefined}
+              className={
+                headerFileLabel
+                  ? "workspace__header-file muted"
+                  : "workspace__header-session-hint muted"
+              }
 
-          >
+              title={headerFileTitle}
 
-            {selectedPath?.trim()
-              ? basenameRel(selectedPath)
-              : "Si recargas la página, la sesión del servidor puede perderse: vuelve a conectar desde el inicio."}
+            >
 
-          </span>
+              {headerFileLabel
+                ? headerFileLabel
+                : "Si recargas la página, la sesión del servidor puede perderse: vuelve a conectar desde el inicio."}
+
+            </span>
+
+          </div>
+
+          <div className="workspace__header-actions">
+
+            {logoutErr && (
+
+              <p className="error small workspace__logout-error" role="alert">
+
+                {logoutErr}
+
+              </p>
+
+            )}
+
+            <button
+
+              type="button"
+
+              className="btn workspace__logout-btn"
+
+              onClick={onLogout}
+
+              disabled={logoutLoading}
+
+              aria-busy={logoutLoading}
+
+              aria-label={logoutLoading ? "Cerrando sesión" : "Cerrar sesión"}
+
+              title="Cerrar sesión"
+
+            >
+
+              {logoutLoading ? (
+
+                <span className="workspace__logout-spinner" aria-hidden />
+
+              ) : (
+
+                <span className="workspace__logout-btn-icon" aria-hidden>
+
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none">
+
+                    <path
+
+                      d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+
+                      stroke="currentColor"
+
+                      strokeWidth="2"
+
+                      strokeLinecap="round"
+
+                      strokeLinejoin="round"
+
+                    />
+
+                  </svg>
+
+                </span>
+
+              )}
+
+            </button>
+
+          </div>
 
         </div>
 
-        <div className="workspace__header-actions">
+        <div className="workspace__bar-ingest" aria-live="polite">
 
-          {logoutErr && (
+          {ingestErr && (
 
-            <p className="error small workspace__logout-error" role="alert">
+            <p className="error small workspace__bar-ingest-err" role="alert">
 
-              {logoutErr}
+              {ingestErr}
 
             </p>
 
           )}
 
-          <button
-
-            type="button"
-
-            className="btn workspace__logout-btn"
-
-            onClick={onLogout}
-
-            disabled={logoutLoading}
-
-            aria-busy={logoutLoading}
-
-            aria-label={logoutLoading ? "Cerrando sesión" : "Cerrar sesión"}
-
-            title="Cerrar sesión"
-
-          >
-
-            {logoutLoading ? (
-
-              <span className="workspace__logout-spinner" aria-hidden />
-
-            ) : (
-
-              <span className="workspace__logout-btn-icon" aria-hidden>
-
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none">
-
-                  <path
-
-                    d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
-
-                    stroke="currentColor"
-
-                    strokeWidth="2"
-
-                    strokeLinecap="round"
-
-                    strokeLinejoin="round"
-
-                  />
-
-                </svg>
-
-              </span>
-
-            )}
-
-          </button>
-
-        </div>
-
-      </header>
-
-
-
-      <div className="workspace__grid">
-
-        <aside className="panel workspace__panel workspace__panel--tree">
-
-          <h2>CONTEXTO MAESTRO</h2>
-
-          <FolderTree root={dir} onSelectFile={onSelectFile} selectedPath={selectedPath} />
-
-        </aside>
-
-
-
-        <section className="panel workspace__panel workspace__panel--file">
-
-          <h2>Archivo</h2>
-
-          {selectedPath && <div className="path">{selectedPath}</div>}
-
-          <div className="workspace__file-body">
-
-            {fileErr && <p className="error">{fileErr}</p>}
-
-            {fileContent !== null && <pre className="file-preview">{fileContent}</pre>}
-
-          </div>
-
-        </section>
-
-
-
-        <aside className="panel workspace__panel workspace__panel--chat">
-
-          <h2 className="workspace__panel-chat-title">Consulta</h2>
-
-          <div className="workspace__chat-scroll">
-
           {ingestLoading && ingestProgress && (
 
-            <div className="ingest-progress ingest-progress--auto" aria-live="polite">
+            <div className="ingest-progress ingest-progress--bar">
 
-              <p className="ingest-progress__lead small muted">Indexando el repositorio en Pinecone…</p>
+              <p className="ingest-progress__lead ingest-progress__lead--bar small muted">
 
-              <div className="ingest-progress__stats">
+                Indexando → pgvector…
 
-                {ingestProgress.totalFiles > 0 ? (
+              </p>
+
+              <div className="ingest-progress__stats ingest-progress__stats--bar">
+
+                {ingestProgress.mode === "sync" ? (
+
+                  <span className="muted">Servidor indexando (sin avance intermedio)…</span>
+
+                ) : ingestProgress.totalFiles > 0 ? (
 
                   <>
 
@@ -551,15 +785,31 @@ export function WorkspacePage() {
 
                 ) : (
 
-                  <span className="muted">Preparando lista de archivos…</span>
+                  <span className="muted">Preparando lista…</span>
 
                 )}
 
               </div>
 
+              {ingestProgress.detail && (
+
+                <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
+
+                  {ingestProgress.detail}
+
+                </div>
+
+              )}
+
               {ingestProgress.currentFile && (
 
-                <div className="ingest-progress__file small muted" title={ingestProgress.currentFile}>
+                <div
+
+                  className="ingest-progress__file ingest-progress__file--bar small muted"
+
+                  title={ingestProgress.currentFile}
+
+                >
 
                   {ingestProgress.currentFile}
 
@@ -571,9 +821,13 @@ export function WorkspacePage() {
 
                 className={
 
-                  "ingest-progress__track" +
+                  "ingest-progress__track ingest-progress__track--bar" +
 
-                  (ingestProgress.totalFiles === 0 ? " ingest-progress__track--indeterminate" : "")
+                  (ingestProgress.mode === "sync" || ingestProgress.totalFiles === 0
+
+                    ? " ingest-progress__track--indeterminate"
+
+                    : "")
 
                 }
 
@@ -603,43 +857,57 @@ export function WorkspacePage() {
 
           )}
 
-          {ingestErr && (
-
-            <p className="error small mt" role="alert">
-
-              {ingestErr}
-
-            </p>
-
-          )}
-
-
-
           {ingestComplete && ingestResult && (
 
-            <div className="ingest-complete mt" role="status">
+            <div className="ingest-complete ingest-complete--bar" role="status">
 
-              <div className="ingest-complete__title">Índice listo</div>
+              <div className="ingest-complete__row">
 
-              <p className="ingest-complete__stats small">
+                <span className="ingest-complete__title">Índice listo</span>
 
-                Archivos: <strong>{ingestResult.filesProcessed}</strong>
+                <span className="ingest-complete__stats ingest-complete__stats--bar small">
 
-                {" · "}
+                  <strong>{ingestResult.filesProcessed}</strong> arch ·{" "}
 
-                Chunks: <strong>{ingestResult.chunksIndexed}</strong>
+                  <strong>{ingestResult.chunksIndexed}</strong> chunks ·{" "}
 
-                {" · "}
+                  <code className="ingest-complete__ns">{ingestResult.namespace}</code>
 
-                <code className="ingest-complete__ns">{ingestResult.namespace}</code>
+                </span>
 
-              </p>
+                <button
+
+                  type="button"
+
+                  className="btn secondary btn--compact"
+
+                  disabled={clearLoading || ingestLoading}
+
+                  onClick={() => void onClearVectorIndex()}
+
+                >
+
+                  {clearLoading ? "Vaciando…" : "Vaciar índice"}
+
+                </button>
+
+              </div>
+
+              {clearErr && (
+
+                <p className="error small workspace__bar-ingest-err" role="alert">
+
+                  {clearErr}
+
+                </p>
+
+              )}
 
               {ingestResult.skipped.length > 0 && (
 
-                <details className="ingest-skipped-details small">
+                <details className="ingest-skipped-details ingest-skipped-details--bar small">
 
-                  <summary>Archivos omitidos ({ingestResult.skipped.length})</summary>
+                  <summary>Omitidos ({ingestResult.skipped.length})</summary>
 
                   <ul className="ingest-skipped-list">
 
@@ -659,35 +927,253 @@ export function WorkspacePage() {
 
           )}
 
-          {chatErr && <p className="error workspace__chat-scroll-err">{chatErr}</p>}
+        </div>
 
-          {chatAns && (
+      </header>
 
-            <div className="chat-answer">
 
-              <ChatMarkdown content={chatAns} />
 
-              {chatSources.length > 0 && (
+      <div className="workspace__grid">
 
-                <div className="chat-answer__sources">
+        <aside className="panel workspace__panel workspace__panel--sidebar">
 
-                  <span className="chat-answer__sources-label">Fuentes</span>
+          <div className="workspace__sidebar-section workspace__sidebar-section--tree">
 
-                  <ul className="chat-answer__sources-list">
+            <h2>CONTEXTO MAESTRO</h2>
 
-                    {chatSources.map((s, i) => (
+            <FolderTree root={dir} onSelectFile={onSelectFile} selectedPath={selectedPath} />
 
-                      <li key={`${i}-${s}`}>{s}</li>
+          </div>
 
-                    ))}
+          <div className="workspace__sidebar-section workspace__sidebar-section--support">
 
-                  </ul>
+            <h2>SOPORTE</h2>
+
+            <div className="workspace__support-wrap">
+
+              <SupportPanel
+
+                documents={supportDocs}
+
+                selectedId={selectedSupportId}
+
+                onSelect={onSelectSupport}
+
+                onUpload={handleSupportUpload}
+
+                onDelete={handleSupportDelete}
+
+              />
+
+            </div>
+
+          </div>
+
+        </aside>
+
+
+
+        <section className="panel workspace__panel workspace__panel--file">
+
+          <h2>{fileViewSource === "support" ? "Soporte" : "Archivo"}</h2>
+
+          {fileViewSource === "repo" && selectedPath && <div className="path">{selectedPath}</div>}
+
+          {fileViewSource === "support" && selectedSupportDoc && (
+
+            <div className="path">
+
+              Soporte · {selectedSupportDoc.name}
+
+              <span className="muted small workspace__path-hint">(local — pendiente de backend)</span>
+
+            </div>
+
+          )}
+
+
+
+          <div className="workspace__file-body">
+
+            {fileViewSource === "repo" && fileErr && <p className="error">{fileErr}</p>}
+
+            {fileViewSource === "repo" && fileContent !== null && (
+
+              <pre className="file-preview">{fileContent}</pre>
+
+            )}
+
+            {fileViewSource === "repo" && selectedPath && fileContent === null && !fileErr && (
+
+              <div className="workspace__file-placeholder muted small">Cargando archivo…</div>
+
+            )}
+
+            {fileViewSource === "repo" && !selectedPath && (
+
+              <div className="workspace__file-placeholder muted small">
+
+                Elige un archivo del contexto maestro.
+
+              </div>
+
+            )}
+
+            {fileViewSource === "support" && selectedSupportDoc && (
+
+              <>
+
+                <div className="workspace__file-toolbar">
+
+                  {!supportEditing ? (
+
+                    <button type="button" className="btn" onClick={startSupportEdit}>
+
+                      Editar Markdown
+
+                    </button>
+
+                  ) : (
+
+                    <>
+
+                      <button type="button" className="btn primary" onClick={saveSupportEdit}>
+
+                        Guardar
+
+                      </button>
+
+                      <button type="button" className="btn" onClick={cancelSupportEdit}>
+
+                        Cancelar
+
+                      </button>
+
+                    </>
+
+                  )}
 
                 </div>
 
-              )}
+                {supportEditing ? (
 
-            </div>
+                  <textarea
+
+                    className="workspace__support-editor"
+
+                    value={supportDraft}
+
+                    onChange={(e) => setSupportDraft(e.target.value)}
+
+                    spellCheck={false}
+
+                    aria-label="Contenido Markdown"
+
+                  />
+
+                ) : (
+
+                  <div className="workspace__support-preview">
+
+                    <ChatMarkdown content={selectedSupportDoc.content} />
+
+                  </div>
+
+                )}
+
+              </>
+
+            )}
+
+            {fileViewSource === "support" && !selectedSupportDoc && (
+
+              <div className="workspace__file-placeholder muted small">
+
+                Sube un .md o elige un soporte en la columna izquierda.
+
+              </div>
+
+            )}
+
+          </div>
+
+        </section>
+
+
+
+        <aside className="panel workspace__panel workspace__panel--chat">
+
+          <h2 className="workspace__panel-chat-title">Consulta</h2>
+
+          <div className="workspace__chat-scroll">
+
+          {chatHistoryErr && (
+
+            <p className="error small workspace__chat-scroll-err" role="status">
+
+              Historial: {chatHistoryErr}
+
+            </p>
+
+          )}
+
+          {chatErr && <p className="error workspace__chat-scroll-err">{chatErr}</p>}
+
+          <div className="chat-thread">
+
+            {chatTurns.map((t) => (
+
+              <article key={t.id} className="chat-thread__turn">
+
+                <div className="chat-thread__question">
+
+                  <span className="chat-thread__label">Tú</span>
+
+                  <div className="chat-thread__question-text">{t.question}</div>
+
+                </div>
+
+                <div className="chat-thread__answer">
+
+                  <span className="chat-thread__label">Asistente</span>
+
+                  <ChatMarkdown content={t.answer} />
+
+                  {t.sources && t.sources.length > 0 && (
+
+                    <div className="chat-answer__sources">
+
+                      <span className="chat-answer__sources-label">Fuentes</span>
+
+                      <ul className="chat-answer__sources-list">
+
+                        {t.sources.map((s, i) => (
+
+                          <li key={`${t.id}-s-${i}-${s}`}>{s}</li>
+
+                        ))}
+
+                      </ul>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              </article>
+
+            ))}
+
+          </div>
+
+          {chatLoading && (
+
+            <p className="muted small chat-thread__loading" aria-live="polite">
+
+              Generando respuesta…
+
+            </p>
 
           )}
 

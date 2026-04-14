@@ -1,10 +1,12 @@
 import type {
+  ChatHistoryEntry,
   ConnectResponse,
   FileContentResponse,
   GitConnectRequest,
   IngestProgressEvent,
   TagsResponse,
   VectorChatResponse,
+  VectorClearResponse,
   VectorIngestResponse,
 } from "../types";
 
@@ -89,12 +91,22 @@ export async function fetchFileContent(queryPath: string): Promise<FileContentRe
   return parseJson<FileContentResponse>(res);
 }
 
-export async function vectorIngest(): Promise<VectorIngestResponse> {
+export async function vectorIngest(init?: { signal?: AbortSignal }): Promise<VectorIngestResponse> {
   const res = await fetch(`${apiBase()}/vector/ingest`, {
     method: "POST",
     headers: headers(),
+    signal: init?.signal,
   });
   return parseJson<VectorIngestResponse>(res);
+}
+
+/** Vacía el índice vectorial del repo actual (pgvector: borra filas del namespace; Pinecone: delete namespace). */
+export async function vectorClearIndex(): Promise<VectorClearResponse> {
+  const res = await fetch(`${apiBase()}/vector/index`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  return parseJson<VectorClearResponse>(res);
 }
 
 /**
@@ -102,6 +114,7 @@ export async function vectorIngest(): Promise<VectorIngestResponse> {
  */
 export async function vectorIngestStream(
   onProgress: (ev: IngestProgressEvent) => void,
+  init?: { signal?: AbortSignal },
 ): Promise<VectorIngestResponse> {
   const res = await fetch(`${apiBase()}/vector/ingest/stream`, {
     method: "POST",
@@ -109,6 +122,7 @@ export async function vectorIngestStream(
       ...headers(),
       Accept: "application/x-ndjson, application/json;q=0.9, */*;q=0.1",
     },
+    signal: init?.signal,
   });
   // Backend antiguo o preview sin proxy: no existe la ruta de streaming; usar ingesta clásica.
   if (res.status === 404) {
@@ -170,7 +184,13 @@ export async function vectorIngestStream(
     consumeNdjsonLine(tail);
   }
   if (!lastDone) {
-    throw new Error("La ingesta terminó sin confirmación del servidor");
+    const hint =
+      import.meta.env.VITE_API_URL === "/api" || String(import.meta.env.VITE_API_URL ?? "").endsWith("/api")
+        ? " Suele pasar si el proxy de Vite cierra la conexión larga: en frontend-sesion1/.env pon VITE_API_URL=http://127.0.0.1:8080 (CORS ya está permitido) y reinicia npm run dev."
+        : "";
+    throw new Error(
+      "La ingesta terminó sin confirmación del servidor (no se recibió DONE en el stream)." + hint,
+    );
   }
   return lastDone;
 }
@@ -180,7 +200,7 @@ async function vectorIngestFallbackProgress(
   onProgress: (ev: IngestProgressEvent) => void,
 ): Promise<VectorIngestResponse> {
   onProgress({ phase: "START", totalFiles: 0 });
-  const r = await vectorIngest();
+  const r = await vectorIngest({});
   onProgress({
     phase: "DONE",
     filesProcessed: r.filesProcessed,
@@ -216,4 +236,13 @@ export async function vectorChat(question: string): Promise<VectorChatResponse> 
     body: JSON.stringify({ question }),
   });
   return parseJson<VectorChatResponse>(res);
+}
+
+/** Historial del chat en Firestore (mismo userId que X-DocViz-User). */
+export async function fetchChatHistory(limit = 40): Promise<ChatHistoryEntry[]> {
+  const q = encodeURIComponent(String(Math.min(Math.max(1, limit), 100)));
+  const res = await fetch(`${apiBase()}/vector/chat/history?limit=${q}`, {
+    headers: headers(),
+  });
+  return parseJson<ChatHistoryEntry[]>(res);
 }

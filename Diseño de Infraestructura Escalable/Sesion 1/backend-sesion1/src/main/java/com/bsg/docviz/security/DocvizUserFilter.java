@@ -22,6 +22,12 @@ public class DocvizUserFilter extends OncePerRequestFilter {
             return;
         }
 
+        // Comprobación de Firestore sin sesión DocViz (solo lectura de conectividad)
+        if ("GET".equalsIgnoreCase(request.getMethod()) && "/firestore/health".equals(request.getRequestURI())) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         String raw = request.getHeader(HEADER);
         if (raw == null || raw.isBlank()) {
             response.setStatus(HttpServletResponse.SC_BAD_REQUEST);

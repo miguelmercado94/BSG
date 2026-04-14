@@ -1,4 +1,23 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docviz-postgres
+    environment:
+      POSTGRES_USER: docviz
+      POSTGRES_PASSWORD: docviz
+      POSTGRES_DB: docviz
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docviz -d docviz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend-sesion1
@@ -10,8 +29,15 @@ services:
       - "8080:8080"
     environment:
       PORT: "8080"
+      # Conexión al Postgres del compose (hostname = nombre del servicio)
+      DATABASE_URL: jdbc:postgresql://postgres:5432/docviz
+      DATABASE_USER: docviz
+      DATABASE_PASSWORD: docviz
       # Perfil Spring: local (Ollama) por defecto; para Gemini: SPRING_PROFILES_ACTIVE=develop (y JAR build con -P"!local,develop")
       # Ollama en el host y backend en contenedor: OLLAMA_BASE_URL=http://host.docker.internal:11434 en backend-sesion1/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -28,3 +54,6 @@ services:
       backend:
         condition: service_started
     restart: unless-stopped
+
+volumes:
+  pgdata:

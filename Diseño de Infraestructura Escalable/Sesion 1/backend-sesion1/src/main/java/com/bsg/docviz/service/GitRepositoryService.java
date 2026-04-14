@@ -372,14 +372,17 @@ public class GitRepositoryService {
         if (h.exitCode() == 0 && !h.stdoutText().trim().isBlank()) {
             return "HEAD";
         }
-        String[] candidates = {"origin/main", "origin/master", "main", "master"};
+        String[] candidates = {
+            "origin/main", "origin/master", "origin/develop", "main", "master", "develop"
+        };
         for (String c : candidates) {
             GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "rev-parse", "--verify", c);
             if (r.exitCode() == 0 && !r.stdoutText().trim().isBlank()) {
                 return c;
             }
         }
-        throw new IllegalStateException("Could not resolve HEAD, origin/main or origin/master to list the tree");
+        throw new IllegalStateException(
+                "Could not resolve a revision (HEAD, origin/main, origin/master, origin/develop, …) to list the tree");
     }
 
     public List<String> listTrackedFiles(Path repoRoot, String revisionSpec) throws IOException, InterruptedException {

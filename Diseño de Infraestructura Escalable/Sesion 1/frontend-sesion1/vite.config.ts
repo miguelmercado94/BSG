@@ -1,12 +1,30 @@
 import react from "@vitejs/plugin-react";
+import type { ProxyOptions } from "vite";
 import { defineConfig } from "vitest/config";
 
-const apiProxy = {
-  "/api": {
-    target: "http://127.0.0.1:8080",
-    changeOrigin: true,
-    rewrite: (p: string) => p.replace(/^\/api/, ""),
+/**
+ * POST /vector/ingest/stream puede tardar muchos minutos (NDJSON).
+ * El proxy de Node por defecto corta la conexión y el cliente nunca recibe phase DONE.
+ */
+const longRunningApiProxy: ProxyOptions = {
+  target: "http://127.0.0.1:8080",
+  changeOrigin: true,
+  rewrite: (p: string) => p.replace(/^\/api/, ""),
+  timeout: 86_400_000,
+  proxyTimeout: 86_400_000,
+  configure(proxy) {
+    proxy.on("proxyReq", (proxyReq, req) => {
+      proxyReq.setTimeout(0);
+      req.socket?.setTimeout(0);
+    });
+    proxy.on("proxyRes", (proxyRes) => {
+      proxyRes.setTimeout(0);
+    });
   },
+};
+
+const apiProxy = {
+  "/api": longRunningApiProxy,
 };
 
 export default defineConfig({

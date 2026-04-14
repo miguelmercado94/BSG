@@ -21,6 +21,10 @@ __pycache__/
 context-masters/
 **/context-masters/
 
+# Firebase (nunca subir claves de servicio)
+**/firebase-adminsdk*.json
+**/*-firebase-adminsdk-*.json
+
 # Environment & secrets
 .env
 .env.local

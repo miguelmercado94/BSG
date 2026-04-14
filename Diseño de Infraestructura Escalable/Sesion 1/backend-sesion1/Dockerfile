@@ -28,3 +28,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD wget -qO- --header="X-DocViz-User: healthcheck" http://127.0.0.1:8080/tags >/dev/null || exit 1
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+
+# Scripts pgvector en el host (Postgres accesible; pip install -r scripts/requirements-smoke.txt):
+#   python scripts/pgvector_smoke_test.py
+#   python scripts/pgvector_clear.py --list
+#   python scripts/pgvector_clear.py --namespace TU_NAMESPACE
+#   python scripts/pgvector_clear.py --all --yes
