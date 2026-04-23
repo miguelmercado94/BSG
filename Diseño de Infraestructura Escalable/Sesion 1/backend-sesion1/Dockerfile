@@ -12,11 +12,16 @@ RUN mvn -q -B "-P${MAVEN_PROFILES}" dependency:resolve -DskipTests
 COPY src ./src
 RUN mvn -q -B -DskipTests "-P${MAVEN_PROFILES}" package
 
-FROM eclipse-temurin:21-jre-alpine
+# Debian (glibc): gRPC/Firestore + netty-tcnative suelen fallar con SIGSEGV en Alpine (musl).
+FROM eclipse-temurin:21-jre-jammy
 LABEL org.opencontainers.image.title="DocViz Backend" \
       org.opencontainers.image.description="Document Context Visualizer API"
 
-RUN apk add --no-cache git wget
+# git + wget: el backend usa ProcessBuilder → binario `git` (clone, ls-tree, show, checkout…), no JGit embebido.
+RUN apt-get update && apt-get install -y --no-install-recommends git wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && git --version \
+    && test -x /usr/bin/git
 
 WORKDIR /app
 COPY --from=build /src/target/backend-sesion1-*.jar /app/app.jar
@@ -25,7 +30,7 @@ EXPOSE 8080
 
 # El filtro DocViz exige X-DocViz-User en todas las rutas
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-  CMD wget -qO- --header="X-DocViz-User: healthcheck" http://127.0.0.1:8080/tags >/dev/null || exit 1
+  CMD wget -qO- --header="X-DocViz-User: healthcheck" http://127.0.0.1:8080/docviz/tags >/dev/null || exit 1
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 

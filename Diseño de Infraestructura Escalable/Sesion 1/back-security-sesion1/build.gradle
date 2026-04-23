@@ -1,0 +1,124 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.0.2'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'jacoco'
+}
+
+group = 'com.bsg'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly 'org.projectlombok:lombok'
+    // Visible en el classpath de compilación del IDE (IntelliJ/Eclipse) para coordinar Lombok + MapStruct.
+    compileOnly 'org.projectlombok:lombok-mapstruct-binding:0.2.0'
+
+    implementation 'org.mapstruct:mapstruct:1.6.3'
+    // MapStruct FAQ: Lombok debe ir antes que mapstruct-processor en el classpath de AP; el binding va al final.
+    annotationProcessor 'org.projectlombok:lombok'
+    annotationProcessor 'org.mapstruct:mapstruct-processor:1.6.3'
+    annotationProcessor 'org.projectlombok:lombok-mapstruct-binding:0.2.0'
+
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-data-r2dbc'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+    implementation 'org.springframework.data:spring-data-redis'
+    implementation 'org.springdoc:springdoc-openapi-starter-webflux-ui:3.0.2'
+
+    // Jackson 2.x: JwtServiceImpl y jjwt-jackson usan com.fasterxml.jackson.*.
+    // Spring Boot 4 también trae Jackson 3 (tools.jackson) vía starters; este BOM alinea Jackson 2 en el classpath.
+    implementation platform('com.fasterxml.jackson:jackson-bom:2.20.2')
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // JWT (JJWT 0.12.x API: parser().verifyWith(), parseSignedClaims, etc.)
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+
+    runtimeOnly 'org.postgresql:r2dbc-postgresql:1.0.7.RELEASE'
+
+    implementation platform('software.amazon.awssdk:bom:2.29.51')
+    implementation 'software.amazon.awssdk:dynamodb'
+
+    implementation 'io.github.cdimascio:dotenv-java:3.0.0'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'io.projectreactor:reactor-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.4')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test', org.gradle.api.tasks.testing.Test) {
+    useJUnitPlatform()
+    finalizedBy 'jacocoTestReport'
+    // Evita ClassNotFound en el worker de tests cuando el JDK infiere module-path (Gradle 8 + Java 21).
+    modularity.inferModulePath = false
+    jvmArgs '-Dfile.encoding=UTF-8', '-Dsun.jnu.encoding=UTF-8'
+}
+
+jacoco {
+    toolVersion = '0.8.12'
+}
+
+/**
+ * Exclusiones alineadas con SonarQube (DTOs, entidades, config, MapStruct) y capa de infraestructura
+ * (R2DBC/DynamoDB/Redis/adaptadores) cubierta mejor por tests de integración o contratos.
+ */
+def jacocoExcludedFiles = [
+        'com/bsg/security/dto/**',
+        'com/bsg/security/infrastructure/entity/**',
+        'com/bsg/security/config/**',
+        'com/bsg/security/mapper/**',
+        'com/bsg/security/**/BackSecuritySesion1Application.class',
+        'com/bsg/security/infrastructure/adapter/persistence/**',
+        'com/bsg/security/infrastructure/adapter/cache/**',
+        'com/bsg/security/infrastructure/repository/impl/**',
+        'com/bsg/security/infrastructure/dynamodb/**',
+        'com/bsg/security/infrastructure/scheduler/**',
+        'com/bsg/security/infrastructure/repository/*.class',
+]
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs.collect { d ->
+        fileTree(dir: d, excludes: jacocoExcludedFiles)
+    }))
+}
+
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs.collect { d ->
+        fileTree(dir: d, excludes: jacocoExcludedFiles)
+    }))
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+check.dependsOn jacocoTestCoverageVerification

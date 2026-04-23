@@ -8,9 +8,12 @@ RUN npm ci
 
 COPY . .
 
-# URL base del API en el navegador (obligatoria). Ej.: http://127.0.0.1:8080 (compose) o https://tu-api.up.railway.app
+# URL base del API en el navegador. En Docker Compose: /api (Nginx reenvía a backend). Sin proxy: http://host:8080/docviz
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=${VITE_API_URL}
+# back-security: /security-api con Nginx → back-security:8081/security-auth; sin proxy: http://host:8081/security-auth
+ARG VITE_SECURITY_URL=/security-api
+ENV VITE_SECURITY_URL=${VITE_SECURITY_URL}
 
 RUN npm run build
 

@@ -3,8 +3,8 @@ package com.bsg.docviz.config;
 import com.bsg.docviz.dto.GitConnectRequest;
 import com.bsg.docviz.dto.GitConnectionMode;
 import com.bsg.docviz.security.CurrentUser;
-import com.bsg.docviz.service.GitRepositoryService;
-import com.bsg.docviz.service.SessionRegistry;
+import com.bsg.docviz.application.port.output.GitRepositoryPort;
+import com.bsg.docviz.application.port.output.SessionRegistryPort;
 import com.bsg.docviz.vector.VectorIngestService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,16 +29,16 @@ public class DocvizGitBootstrapRunner implements ApplicationRunner {
 
     private final DocvizBootstrapProperties bootstrap;
     private final VectorProperties vectorProperties;
-    private final GitRepositoryService gitRepositoryService;
+    private final GitRepositoryPort gitRepositoryService;
     private final VectorIngestService vectorIngestService;
-    private final SessionRegistry sessionRegistry;
+    private final SessionRegistryPort sessionRegistry;
 
     public DocvizGitBootstrapRunner(
             DocvizBootstrapProperties bootstrap,
             VectorProperties vectorProperties,
-            GitRepositoryService gitRepositoryService,
+            GitRepositoryPort gitRepositoryService,
             VectorIngestService vectorIngestService,
-            SessionRegistry sessionRegistry) {
+            SessionRegistryPort sessionRegistry) {
         this.bootstrap = bootstrap;
         this.vectorProperties = vectorProperties;
         this.gitRepositoryService = gitRepositoryService;

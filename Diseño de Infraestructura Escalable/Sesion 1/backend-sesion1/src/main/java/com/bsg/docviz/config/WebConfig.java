@@ -35,6 +35,7 @@ public class WebConfig {
                                 "https://*.up.railway.app")
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
+                        .exposedHeaders("X-DocViz-Resolved-Conversation-Id")
                         .allowCredentials(true);
             }
         };

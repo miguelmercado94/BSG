@@ -1,5 +1,6 @@
 package com.bsg.docviz.service;
 
+import com.bsg.docviz.application.port.output.SessionRegistryPort;
 import com.bsg.docviz.config.DocvizProperties;
 import com.bsg.docviz.config.VectorProperties;
 import com.bsg.docviz.security.CurrentUser;
@@ -24,13 +25,13 @@ public class SessionLogoutService {
 
     private static final Logger log = LoggerFactory.getLogger(SessionLogoutService.class);
 
-    private final SessionRegistry sessionRegistry;
+    private final SessionRegistryPort sessionRegistry;
     private final DocvizProperties docvizProperties;
     private final VectorProperties vectorProperties;
     private final VectorStore vectorStore;
 
     public SessionLogoutService(
-            SessionRegistry sessionRegistry,
+            SessionRegistryPort sessionRegistry,
             DocvizProperties docvizProperties,
             VectorProperties vectorProperties,
             VectorStore vectorStore

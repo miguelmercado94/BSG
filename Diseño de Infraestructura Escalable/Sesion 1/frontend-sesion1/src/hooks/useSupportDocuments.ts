@@ -81,14 +81,24 @@ export function useSupportDocuments(userId: string) {
     saveToStorage(userId, docs);
   }, [userId, docs]);
 
-  const add = useCallback((name: string, content: string): string => {
-    const id = newId();
-    setDocs((prev) => {
-      const fileName = uniqueName(normalizeMdFilename(name), prev);
-      return [...prev, { id, name: fileName, content, updatedAt: Date.now() }];
-    });
-    return id;
-  }, []);
+  const add = useCallback(
+    (
+      name: string,
+      content: string,
+      meta?: { objectKey?: string; storageFileName?: string },
+    ): string => {
+      const id = newId();
+      setDocs((prev) => {
+        const fileName = uniqueName(normalizeMdFilename(name), prev);
+        const row: SupportDocument = { id, name: fileName, content, updatedAt: Date.now() };
+        if (meta?.objectKey) row.objectKey = meta.objectKey;
+        if (meta?.storageFileName) row.storageFileName = meta.storageFileName;
+        return [...prev, row];
+      });
+      return id;
+    },
+    [],
+  );
 
   const update = useCallback((id: string, content: string) => {
     setDocs((prev) =>

@@ -1,6 +1,6 @@
-# Entregable — DocViz (Asistente RAG y despliegue)
+# 1. URL del servicio en producción
 
-## 1. URL del servicio en producción
+## Entregable — DocViz (Asistente RAG y despliegue)
 
 **Frontend (aplicación pública):**  
 https://docviz-sesion1-frontend-production.up.railway.app/

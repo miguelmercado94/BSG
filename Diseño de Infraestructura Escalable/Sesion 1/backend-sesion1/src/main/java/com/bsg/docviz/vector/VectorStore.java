@@ -12,4 +12,7 @@ public interface VectorStore {
     List<VectorMatch> queryTopK(String namespace, float[] vector, int topK, String userLabel);
 
     void deleteAllInNamespace(String namespace);
+
+    /** Borra todos los vectores cuyo campo metadata/source coincide (p. ej. un documento de soporte). */
+    void deleteBySource(String namespace, String source);
 }

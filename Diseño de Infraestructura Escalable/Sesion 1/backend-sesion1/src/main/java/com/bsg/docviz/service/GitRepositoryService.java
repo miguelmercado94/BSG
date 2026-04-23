@@ -1,44 +1,113 @@
 package com.bsg.docviz.service;
 
+import com.bsg.docviz.application.port.output.GitRepositoryPort;
+import com.bsg.docviz.application.port.output.SessionRegistryPort;
 import com.bsg.docviz.config.DocvizProperties;
+import com.bsg.docviz.dto.FileContentResponse;
+import com.bsg.docviz.dto.FolderStructureDto;
+import com.bsg.docviz.dto.FolderStructureMapper;
+import com.bsg.docviz.dto.GitConnectionMode;
 import com.bsg.docviz.dto.GitConnectRequest;
 import com.bsg.docviz.dto.TreeNodeDto;
+import com.bsg.docviz.git.GitEngine;
+import com.bsg.docviz.git.GitRepoFilesystem;
 import com.bsg.docviz.security.CurrentUser;
 import com.bsg.docviz.util.FileTreeBuilder;
+import com.bsg.docviz.util.RepoPathExclude;
+import com.bsg.docviz.util.RepositoryUrlNormalizer;
+import com.bsg.docviz.util.SourceTextExtractor;
 import org.springframework.stereotype.Service;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 @Service
-public class GitRepositoryService {
+public class GitRepositoryService implements GitRepositoryPort {
 
-    private static final Duration CLONE_TIMEOUT = Duration.ofMinutes(15);
-    private static final Duration GIT_OP_TIMEOUT = Duration.ofMinutes(2);
+    private static final int VECTOR_NS_MAX = 500;
 
-    /** Un checkout a la vez por repo (evita bloqueo del índice Git en paralelo). */
-    private final ConcurrentHashMap<String, Object> materializeLocks = new ConcurrentHashMap<>();
+    /**
+     * Una operación Git a la vez por directorio de trabajo (mismo .git). En Windows varias llamadas en
+     * paralelo (ingesta + RAG + vista) chocan con {@code .git/objects/maintenance.lock}.
+     */
+    private final ConcurrentHashMap<String, Object> repoGitLocks = new ConcurrentHashMap<>();
 
-    private final SessionRegistry sessionRegistry;
+    /** Evita repetir mitigaciones por la misma ruta canónica. */
+    private final Set<String> mitigatedRepoKeys = ConcurrentHashMap.newKeySet();
+
+    private static IllegalStateException wrapGitIOException(IOException e) {
+        String m = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        String lower = m.toLowerCase(Locale.ROOT);
+        String msg = "Git I/O error: " + m;
+        if (lower.contains("pack") || lower.contains("onedrive") || lower.contains(".idx")) {
+            msg +=
+                    " — Suele ocurrir con clones bajo OneDrive o carpetas sincronizadas. Define DOCVIZ_CONTEXT_MASTERS_BASE_PATH "
+                            + "(o docviz.context-masters.base-path) en una ruta fija fuera de la nube (p. ej. C:/docviz/context-masters), "
+                            + "reinicia el backend y borra la carpeta vieja bajo context-masters si el clon quedó corrupto.";
+        }
+        return new IllegalStateException(msg, e);
+    }
+
+    private final SessionRegistryPort sessionRegistry;
     private final DocvizProperties docvizProperties;
+    private final GitEngine gitEngine;
 
-    public GitRepositoryService(SessionRegistry sessionRegistry, DocvizProperties docvizProperties) {
+    public GitRepositoryService(
+            SessionRegistryPort sessionRegistry, DocvizProperties docvizProperties, GitEngine gitEngine) {
         this.sessionRegistry = sessionRegistry;
         this.docvizProperties = docvizProperties;
+        this.gitEngine = gitEngine;
+    }
+
+    @FunctionalInterface
+    private interface IoSupplier<T> {
+        T get() throws IOException;
+    }
+
+    /**
+     * Serializa operaciones Git por repo y reintenta errores transitorios de bloqueo (Windows / OneDrive).
+     */
+    private <T> T executeWithGitLock(Path repoRoot, IoSupplier<T> supplier) throws IOException, InterruptedException {
+        String key = canonicalRepoKey(repoRoot);
+        Object lockObj = repoGitLocks.computeIfAbsent(key, k -> new Object());
+        synchronized (lockObj) {
+            ensureRepoMitigations(repoRoot, key);
+            int attempt = 0;
+            while (true) {
+                try {
+                    return supplier.get();
+                } catch (IOException e) {
+                    attempt++;
+                    if (attempt >= 8 || !isTransientGitLockIOException(e)) {
+                        throw e;
+                    }
+                    GitRepoFilesystem.tryDeleteLooseCommitGraph(repoRoot);
+                    try {
+                        Thread.sleep(100L * attempt);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                }
+            }
+        }
+    }
+
+    private void executeVoidWithGitLock(Path repoRoot, IoSupplier<Void> supplier) throws IOException, InterruptedException {
+        executeWithGitLock(
+                repoRoot,
+                () -> {
+                    supplier.get();
+                    return null;
+                });
     }
 
     public String resolveRevisionForListing(Path repoRoot) {
@@ -48,7 +117,7 @@ public class GitRepositoryService {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+            throw wrapGitIOException(e);
         }
     }
 
@@ -60,25 +129,19 @@ public class GitRepositoryService {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+            throw wrapGitIOException(e);
         }
     }
 
     public long objectSizeBytes(Path repoRoot, String revisionSpec, String repoRelativePath) {
         try {
             String rel = normalizeRepoRelativePath(repoRelativePath);
-            String spec = revisionSpec + ":" + rel;
-            GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "cat-file", "-s", spec);
-            if (r.exitCode() != 0) {
-                throw new IllegalStateException("git cat-file failed: " + r.stderrText().trim());
-            }
-            String out = r.stdoutText().trim();
-            return Long.parseLong(out);
+            return executeWithGitLock(repoRoot, () -> gitEngine.blobSizeBytes(repoRoot, revisionSpec, rel));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+            throw wrapGitIOException(e);
         }
     }
 
@@ -89,20 +152,17 @@ public class GitRepositoryService {
     public void materializeFileToWorkingTree(Path repoRoot, String revisionSpec, String repoRelativePath) {
         try {
             String rel = normalizeRepoRelativePath(repoRelativePath);
-            Object lock = materializeLocks.computeIfAbsent(
-                    repoRoot.toAbsolutePath().normalize().toString(), k -> new Object());
-            synchronized (lock) {
-                GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "checkout", revisionSpec, "--", rel);
-                if (r.exitCode() != 0) {
-                    String err = r.stderrText().trim();
-                    throw new IllegalStateException("git checkout failed (¿ruta o red?): " + err);
-                }
-            }
+            executeVoidWithGitLock(
+                    repoRoot,
+                    () -> {
+                        gitEngine.checkoutPath(repoRoot, revisionSpec, rel);
+                        return null;
+                    });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+            throw wrapGitIOException(e);
         }
     }
 
@@ -152,17 +212,12 @@ public class GitRepositoryService {
     public byte[] readBlob(Path repoRoot, String revisionSpec, String repoRelativePath) {
         try {
             String rel = normalizeRepoRelativePath(repoRelativePath);
-            String spec = revisionSpec + ":" + rel;
-            GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "show", spec);
-            if (r.exitCode() != 0) {
-                throw new IllegalStateException("git show failed: " + r.stderrText().trim());
-            }
-            return r.stdoutBytes();
+            return executeWithGitLock(repoRoot, () -> gitEngine.readBlob(repoRoot, revisionSpec, rel));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+            throw wrapGitIOException(e);
         }
     }
 
@@ -187,16 +242,15 @@ public class GitRepositoryService {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Git operation interrupted", e);
         } catch (IOException e) {
-            throw new IllegalStateException("Git I/O error: " + e.getMessage(), e);
+            throw wrapGitIOException(e);
         }
     }
 
-    private void connectInternal(GitConnectRequest req) throws IOException, InterruptedException {
-        UserRepositoryState st = sessionRegistry.current();
+    private record EphemeralRepoRoots(Path root, Path managedCloneRoot) {}
 
+    private EphemeralRepoRoots prepareEphemeralRoots(GitConnectRequest req) throws IOException, InterruptedException {
         Path root;
         Path managedCloneRoot;
-
         switch (req.getMode()) {
             case LOCAL -> {
                 if (req.getLocalPath() == null || req.getLocalPath().isBlank()) {
@@ -234,6 +288,85 @@ public class GitRepositoryService {
             }
             default -> throw new IllegalArgumentException("Unsupported mode");
         }
+        return new EphemeralRepoRoots(root, managedCloneRoot);
+    }
+
+    /**
+     * Árbol de archivos sin persistir sesión (p. ej. administración de célula). Libera el clon HTTPS al terminar.
+     */
+    public FolderStructureDto loadEphemeralFolderStructure(GitConnectRequest req) {
+        try {
+            EphemeralRepoRoots pr = prepareEphemeralRoots(req);
+            try {
+                String rev = resolveRevisionForListingInternal(pr.root());
+                TreeNodeDto tree = FileTreeBuilder.fromPaths(listTrackedFiles(pr.root(), rev));
+                FolderStructureDto directory =
+                        FolderStructureMapper.fromTreeRoot(tree, computeRootFolderLabel(req), pr.root());
+                FolderStructureMapper.ensureRootFolderName(directory, pr.root());
+                if (directory != null) {
+                    String name = folderLabelForConnectUi(req);
+                    if (name != null && !name.isBlank()) {
+                        directory.setFolder(name);
+                    }
+                }
+                return directory;
+            } finally {
+                if (pr.managedCloneRoot() != null) {
+                    deleteRecursivelyQuietly(pr.managedCloneRoot());
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Git operation interrupted", e);
+        } catch (IOException e) {
+            throw wrapGitIOException(e);
+        }
+    }
+
+    /** Contenido de un archivo del repo (blob) sin sesión persistente. */
+    public FileContentResponse loadEphemeralFileContent(GitConnectRequest req, String relativePath) {
+        try {
+            EphemeralRepoRoots pr = prepareEphemeralRoots(req);
+            try {
+                String rev = resolveRevisionForListingInternal(pr.root());
+                byte[] raw = readBlob(pr.root(), rev, relativePath);
+                String text = SourceTextExtractor.extractText(relativePath, raw);
+                FileContentResponse out = new FileContentResponse();
+                out.setPath(relativePath);
+                out.setContent(text != null ? text : "");
+                out.setEncoding("utf-8");
+                return out;
+            } finally {
+                if (pr.managedCloneRoot() != null) {
+                    deleteRecursivelyQuietly(pr.managedCloneRoot());
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Git operation interrupted", e);
+        } catch (IOException e) {
+            throw wrapGitIOException(e);
+        }
+    }
+
+    private static String folderLabelForConnectUi(GitConnectRequest req) {
+        if (req.getMode() == GitConnectionMode.LOCAL) {
+            return localRepositoryFolderName(req.getLocalPath());
+        }
+        String url = req.getRepositoryUrl();
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        String name = url.substring(url.lastIndexOf('/') + 1);
+        return name.endsWith(".git") ? name.substring(0, name.length() - 4) : name;
+    }
+
+    private void connectInternal(GitConnectRequest req) throws IOException, InterruptedException {
+        UserRepositoryState st = sessionRegistry.current();
+
+        EphemeralRepoRoots pr = prepareEphemeralRoots(req);
+        Path root = pr.root();
+        Path managedCloneRoot = pr.managedCloneRoot();
 
         String rev = resolveRevisionForListingInternal(root);
         TreeNodeDto tree;
@@ -257,6 +390,12 @@ public class GitRepositoryService {
         st.getIngestContentCache().clear();
         String rootFolderLabel = computeRootFolderLabel(req);
         st.setConnected(root, managedCloneRoot, rev, tree, rootFolderLabel);
+        if (req.getVectorNamespace() != null && !req.getVectorNamespace().isBlank()) {
+            st.setVectorNamespaceOverride(
+                    RepositoryUrlNormalizer.clampNamespace(req.getVectorNamespace().trim(), VECTOR_NS_MAX));
+        } else {
+            st.setVectorNamespaceOverride(null);
+        }
     }
 
     private static String computeRootFolderLabel(GitConnectRequest req) {
@@ -282,41 +421,18 @@ public class GitRepositoryService {
     }
 
     /**
-     * Clon ligero: metadatos y árbol para listar; los blobs no vienen masivos. Cada archivo se
-     * materializa después con {@link #materializeFileToWorkingTree} solo al visualizar o al indexar.
+     * Clon para listar metadatos; el motor {@link GitEngine} (JGit) realiza clon sin checkout pesado
+     * (JGit).
      */
     private Path cloneMetadataOnly(String cloneUrl, String folderName) throws IOException, InterruptedException {
         Path masters = docvizProperties.resolveRootDirectory();
         Path userDir = masters.resolve(CurrentUser.require());
         Files.createDirectories(userDir);
-
-        Path targetDir = userDir.resolve(folderName);
-        if (Files.exists(targetDir)) {
-            deleteRecursively(targetDir);
-        }
-
-        List<String> cmd = new ArrayList<>();
-        cmd.add("git");
-        cmd.add("clone");
-        cmd.add("--filter=blob:none");
-        cmd.add("--no-checkout");
-        cmd.add(cloneUrl);
-        cmd.add(folderName);
-
-        GitResult r = runGit(userDir, CLONE_TIMEOUT, cmd.toArray(String[]::new));
-        if (r.exitCode() != 0) {
-            if (Files.exists(targetDir)) {
-                deleteRecursivelyQuietly(targetDir);
-            }
-            String err = r.stderrText().trim();
-            String out = r.stdoutText().trim();
-            String msg = "git clone failed: " + err + (out.isBlank() ? "" : " | " + out);
-            throw new IllegalStateException(msg);
-        }
-        return targetDir;
+        return executeWithGitLock(userDir, () -> gitEngine.cloneMetadataOnly(userDir, cloneUrl, folderName));
     }
 
-    static String slugFromGitUrl(String repositoryUrl) {
+    /** Nombre de carpeta/repo derivado de una URL o ruta estilo Git (público para reutilizar en dominio). */
+    public static String slugFromGitUrl(String repositoryUrl) {
         String u = repositoryUrl.replace('\\', '/').trim();
         int q = u.indexOf('?');
         if (q >= 0) {
@@ -354,106 +470,74 @@ public class GitRepositoryService {
 
     private void deleteRecursivelyQuietly(Path root) {
         try {
-            deleteRecursively(root);
+            GitRepoFilesystem.deleteDirectoryRecursive(root);
         } catch (IOException e) {
             throw new IllegalStateException("Could not delete clone directory: " + e.getMessage(), e);
         }
     }
 
     private void verifyGitRepo(Path dir) throws IOException, InterruptedException {
-        GitResult r = runGit(dir, GIT_OP_TIMEOUT, "git", "rev-parse", "--is-inside-work-tree");
-        if (r.exitCode() != 0 || !r.stdoutText().trim().equalsIgnoreCase("true")) {
+        Boolean ok = executeWithGitLock(dir, () -> gitEngine.isInsideWorkTree(dir));
+        if (!Boolean.TRUE.equals(ok)) {
             throw new IllegalArgumentException("localPath is not a git working tree");
         }
     }
 
     private String resolveRevisionForListingInternal(Path repoRoot) throws IOException, InterruptedException {
-        GitResult h = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "rev-parse", "--verify", "HEAD");
-        if (h.exitCode() == 0 && !h.stdoutText().trim().isBlank()) {
-            return "HEAD";
-        }
-        String[] candidates = {
-            "origin/main", "origin/master", "origin/develop", "main", "master", "develop"
-        };
-        for (String c : candidates) {
-            GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "rev-parse", "--verify", c);
-            if (r.exitCode() == 0 && !r.stdoutText().trim().isBlank()) {
-                return c;
-            }
-        }
-        throw new IllegalStateException(
-                "Could not resolve a revision (HEAD, origin/main, origin/master, origin/develop, …) to list the tree");
+        return executeWithGitLock(repoRoot, () -> gitEngine.resolveListingRevision(repoRoot));
     }
 
     public List<String> listTrackedFiles(Path repoRoot, String revisionSpec) throws IOException, InterruptedException {
-        GitResult r = runGit(repoRoot, GIT_OP_TIMEOUT, "git", "ls-tree", "-r", "--name-only", revisionSpec);
-        if (r.exitCode() != 0) {
-            throw new IllegalStateException("git ls-tree failed: " + r.stderrText());
-        }
-        List<String> lines = new ArrayList<>();
-        for (String line : r.stdoutText().split("\r?\n")) {
-            if (!line.isBlank()) {
-                lines.add(line);
-            }
-        }
-        return lines;
+        List<String> lines =
+                executeWithGitLock(repoRoot, () -> gitEngine.listTrackedFilePaths(repoRoot, revisionSpec));
+        return RepoPathExclude.filterWorkspacePaths(lines);
     }
 
-    private static GitResult runGit(Path workingDir, Duration timeout, String... command) throws IOException, InterruptedException {
-        ProcessBuilder pb = new ProcessBuilder(command);
-        if (workingDir != null) {
-            pb.directory(workingDir.toFile());
-        }
-        pb.environment().put("GIT_TERMINAL_PROMPT", "0");
-        pb.redirectErrorStream(false);
-        Process p = pb.start();
-        byte[] out = readAllBytes(p.getInputStream());
-        byte[] err = readAllBytes(p.getErrorStream());
-        boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-        if (!finished) {
-            p.destroyForcibly();
-            throw new IllegalStateException("git command timed out: " + String.join(" ", command));
-        }
-        return new GitResult(p.exitValue(), out, err);
-    }
-
-    private static byte[] readAllBytes(InputStream in) throws IOException {
-        try (InputStream input = in; ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
-            input.transferTo(bos);
-            return bos.toByteArray();
+    private static String canonicalRepoKey(Path workingDir) {
+        try {
+            return workingDir.toRealPath().normalize().toString().toLowerCase(Locale.ROOT);
+        } catch (IOException e) {
+            return workingDir.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
         }
     }
 
-    private static void deleteRecursively(Path root) throws IOException {
-        if (root == null || !Files.exists(root)) {
+    private static boolean isTransientGitLockIOException(IOException e) {
+        String m = e.getMessage();
+        if (m == null) {
+            return false;
+        }
+        String lower = m.toLowerCase(Locale.ROOT);
+        return lower.contains("maintenance.lock")
+                || lower.contains("commit-graph")
+                || lower.contains("objects\\info")
+                || lower.contains("objects/info")
+                || lower.contains("being used by another process")
+                || lower.contains("siendo utilizado por otro proceso")
+                || lower.contains("cannot access the file")
+                || lower.contains("no tiene acceso al archivo")
+                || lower.contains("because it is being used")
+                || lower.contains("access is denied")
+                || lower.contains("acceso denegado");
+    }
+
+    private void ensureRepoMitigations(Path repoRoot, String canonicalKey) {
+        if (!mitigatedRepoKeys.add(canonicalKey)) {
             return;
         }
-        Files.walkFileTree(root, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                Files.deleteIfExists(file);
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                Files.deleteIfExists(dir);
-                return FileVisitResult.CONTINUE;
-            }
-        });
+        try {
+            gitEngine.applyRepoMitigations(repoRoot);
+        } catch (IOException e) {
+            mitigatedRepoKeys.remove(canonicalKey);
+        }
     }
 
-    private record GitResult(int exitCode, byte[] stdout, byte[] stderr) {
-        String stdoutText() {
-            return new String(stdout, StandardCharsets.UTF_8);
-        }
-
-        String stderrText() {
-            return new String(stderr, StandardCharsets.UTF_8);
-        }
-
-        byte[] stdoutBytes() {
-            return stdout;
-        }
+    /**
+     * Borra el clon HTTPS efímero (si existe) y desconecta la sesión del usuario actual.
+     */
+    public void disconnectCleanup() {
+        UserRepositoryState st = sessionRegistry.current();
+        Optional<Path> previous = st.drainManagedCloneRoot();
+        st.disconnect();
+        previous.ifPresent(this::deleteRecursivelyQuietly);
     }
 }

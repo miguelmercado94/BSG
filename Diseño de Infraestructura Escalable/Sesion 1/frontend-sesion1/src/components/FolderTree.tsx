@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { setDocvizFileMentionOnDataTransfer } from "../lib/docvizDrag";
 import type { FolderStructureDto } from "../types";
 
 /** Clave en el Set de expandidos para la carpeta raíz del repo (ej. "findu"). */
@@ -8,6 +9,8 @@ type Props = {
   root: FolderStructureDto;
   onSelectFile: (relativePath: string) => void;
   selectedPath: string | null;
+  /** Botón adicional por archivo (p. ej. visualizar en admin). */
+  onViewFile?: (relativePath: string) => void;
 };
 
 function ChevronIcon({ open }: { open: boolean }) {
@@ -26,8 +29,9 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
-export function FolderTree({ root, onSelectFile, selectedPath }: Props) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+export function FolderTree({ root, onSelectFile, selectedPath, onViewFile }: Props) {
+  /** Raíz expandida por defecto para ver archivos al instante (admin, workspace). */
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set<string>([ROOT_KEY]));
 
   /** Abre la raíz y la cadena de carpetas que contiene el archivo seleccionado. */
   useEffect(() => {
@@ -80,6 +84,7 @@ export function FolderTree({ root, onSelectFile, selectedPath }: Props) {
             expanded={expanded}
             toggleFolder={toggleFolder}
             onSelectFile={onSelectFile}
+            onViewFile={onViewFile}
             selectedPath={selectedPath}
           />
         </ul>
@@ -94,6 +99,7 @@ function FolderRows({
   expanded,
   toggleFolder,
   onSelectFile,
+  onViewFile,
   selectedPath,
 }: {
   node: FolderStructureDto;
@@ -101,26 +107,51 @@ function FolderRows({
   expanded: Set<string>;
   toggleFolder: (folderPath: string) => void;
   onSelectFile: (relativePath: string) => void;
+  onViewFile?: (relativePath: string) => void;
   selectedPath: string | null;
 }) {
+  const files = node.archivos ?? [];
+  const subfolders = node.folders ?? [];
+
   return (
     <>
-      {node.archivos.map((f) => {
+      {files.map((f) => {
         const rel = pathPrefix ? `${pathPrefix}/${f}` : f;
         const active = selectedPath === rel;
         return (
           <li key={rel}>
-            <button
-              type="button"
-              className={`folder-tree__file${active ? " is-active" : ""}`}
-              onClick={() => onSelectFile(rel)}
-            >
-              {f}
-            </button>
+            <div className="folder-tree__file-row">
+              <button
+                type="button"
+                className={`folder-tree__file${active ? " is-active" : ""}`}
+                draggable
+                title="Clic para abrir · arrastra a la pregunta para insertar @[repo:ruta/completa] (mejor recuperación RAG)"
+                onClick={() => onSelectFile(rel)}
+                onDragStart={(e) => setDocvizFileMentionOnDataTransfer(e.dataTransfer, "repo", rel)}
+              >
+                {f}
+              </button>
+              {onViewFile != null && (
+                <button
+                  type="button"
+                  className="folder-tree__file-view"
+                  aria-label={`Visualizar ${f}`}
+                  title="Visualizar"
+                  onClick={() => onViewFile(rel)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                    <path
+                      fill="currentColor"
+                      d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
           </li>
         );
       })}
-      {node.folders.map((sub) => {
+      {subfolders.map((sub) => {
         const nextPrefix = pathPrefix ? `${pathPrefix}/${sub.folder}` : sub.folder;
         const isOpen = expanded.has(nextPrefix);
         return (
@@ -143,6 +174,7 @@ function FolderRows({
                   expanded={expanded}
                   toggleFolder={toggleFolder}
                   onSelectFile={onSelectFile}
+                  onViewFile={onViewFile}
                   selectedPath={selectedPath}
                 />
               </ul>

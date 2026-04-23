@@ -127,4 +127,12 @@ public class PgVectorStore implements VectorStore {
     public void deleteAllInNamespace(String namespace) {
         jdbc.update("DELETE FROM docviz_vector_chunk WHERE namespace = ?", namespace);
     }
+
+    @Override
+    public void deleteBySource(String namespace, String source) {
+        jdbc.update(
+                "DELETE FROM docviz_vector_chunk WHERE namespace = ? AND source = ?",
+                namespace,
+                source);
+    }
 }

@@ -1,5 +1,7 @@
 package com.bsg.docviz.security;
 
+import com.bsg.docviz.context.DocvizCellContext;
+import com.bsg.docviz.context.DocvizTaskContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +16,12 @@ public class DocvizUserFilter extends OncePerRequestFilter {
 
     public static final String HEADER = "X-DocViz-User";
 
+    /** Opcional: código HU / tarea para S3 borradores y workarea en peticiones REST. */
+    public static final String TASK_HU_HEADER = "X-DocViz-Task-Hu";
+
+    /** Opcional: nombre de célula para las mismas rutas S3. */
+    public static final String CELL_HEADER = "X-DocViz-Cell";
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -22,8 +30,15 @@ public class DocvizUserFilter extends OncePerRequestFilter {
             return;
         }
 
+        String servletPath = request.getServletPath();
+        if (servletPath != null && servletPath.startsWith("/ws/")) {
+            // WebSocket: el navegador no envía X-DocViz-User en el handshake; el usuario va en el primer mensaje JSON.
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         // Comprobación de Firestore sin sesión DocViz (solo lectura de conectividad)
-        if ("GET".equalsIgnoreCase(request.getMethod()) && "/firestore/health".equals(request.getRequestURI())) {
+        if ("GET".equalsIgnoreCase(request.getMethod()) && "/firestore/health".equals(servletPath)) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -39,9 +54,25 @@ public class DocvizUserFilter extends OncePerRequestFilter {
 
         try {
             CurrentUser.set(UserIdSanitizer.forFilesystem(raw));
+            String roleHeader = request.getHeader(CurrentUser.ROLE_HEADER);
+            if (roleHeader == null || roleHeader.isBlank()) {
+                CurrentUser.setRole(DocvizRoles.ADMINISTRATOR);
+            } else {
+                CurrentUser.setRole(roleHeader.trim());
+            }
+            String taskHu = request.getHeader(TASK_HU_HEADER);
+            if (taskHu != null && !taskHu.isBlank()) {
+                DocvizTaskContext.setTaskLabel(taskHu);
+            }
+            String cell = request.getHeader(CELL_HEADER);
+            if (cell != null && !cell.isBlank()) {
+                DocvizCellContext.setCellName(cell);
+            }
             filterChain.doFilter(request, response);
         } finally {
             CurrentUser.clear();
+            DocvizTaskContext.clear();
+            DocvizCellContext.clear();
         }
     }
 }

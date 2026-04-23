@@ -17,6 +17,8 @@ public class UserRepositoryState {
     private final FileContentCache viewerContentCache = new FileContentCache();
     /** Prefetch e ingesta a Pinecone. */
     private final FileContentCache ingestContentCache = new FileContentCache();
+    /** Namespace vectorial fijado al conectar un repo de célula (mismo valor que en BD). Índice compartido por namespace. */
+    private String vectorNamespaceOverride;
 
     public boolean isConnected() {
         return connected;
@@ -61,6 +63,14 @@ public class UserRepositoryState {
         return ingestContentCache;
     }
 
+    public String getVectorNamespaceOverride() {
+        return vectorNamespaceOverride;
+    }
+
+    public void setVectorNamespaceOverride(String vectorNamespaceOverride) {
+        this.vectorNamespaceOverride = vectorNamespaceOverride;
+    }
+
     public void disconnect() {
         connected = false;
         repositoryRoot = null;
@@ -68,6 +78,7 @@ public class UserRepositoryState {
         treeRoot = null;
         revisionSpec = "HEAD";
         rootFolderLabel = "";
+        vectorNamespaceOverride = null;
         viewerContentCache.clear();
         ingestContentCache.clear();
     }

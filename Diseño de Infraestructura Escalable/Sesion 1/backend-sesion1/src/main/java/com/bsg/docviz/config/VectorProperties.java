@@ -48,6 +48,11 @@ public class VectorProperties {
     private int chunkOverlap = 120;
     private int ragTopK = 6;
     /**
+     * Tope de caracteres del bloque de contexto RAG (chunks + menciones) enviado al LLM. Si se supera, se trunca el
+     * final con aviso en logs — evita HTTP 400 de Ollama: "the input length exceeds the context length".
+     */
+    private int ragMaxContextChars = 12000;
+    /**
      * Si es true, la ingesta solo indexa {@link #classpathSampleResource} desde el classpath (sin leer el repo Git).
      * Útil para depurar Pinecone/embeddings. Desactivar para indexar todo el repositorio.
      */
@@ -186,6 +191,20 @@ public class VectorProperties {
 
     public void setRagTopK(int ragTopK) {
         this.ragTopK = ragTopK;
+    }
+
+    public int getRagMaxContextChars() {
+        return ragMaxContextChars;
+    }
+
+    public void setRagMaxContextChars(int ragMaxContextChars) {
+        int v = ragMaxContextChars;
+        if (v < 2000) {
+            v = 2000;
+        } else if (v > 500000) {
+            v = 500000;
+        }
+        this.ragMaxContextChars = v;
     }
 
     public boolean isIngestClasspathSampleOnly() {

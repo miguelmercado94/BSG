@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 Limpia datos de desarrollo DocViz:
-  - PostgreSQL: tabla docviz_vector_chunk (vectores pgvector)
+  - PostgreSQL: dominio (células, repos, tareas) + vectores (docviz_vector_chunk)
   - Firestore: colecciones users (chat) y _system (health ping)
+
+Para vaciar también PostgreSQL Security (usuarios) y opciones detalladas:
+  python scripts/clean_all_databases.py --yes [--security-users] [--firestore]
 
 Uso (desde la carpeta Sesion 1):
   pip install -r scripts/requirements-cleanup.txt
@@ -38,31 +41,39 @@ def load_dotenv(path: Path) -> None:
 
 
 def truncate_postgres(database_url: str, user: str, password: str) -> None:
+    """Vacía tablas DocViz en orden (FKs): tareas → repos → células → vectores."""
     import psycopg2
+    from urllib.parse import urlparse
 
-    # jdbc:postgresql://host:5432/dbname -> host, dbname
-    url = database_url.replace("jdbc:postgresql://", "postgresql://")
-    if url.startswith("postgresql://"):
-        rest = url[len("postgresql://") :]
-        if "/" in rest:
-            host_port, db = rest.split("/", 1)
-            db = db.split("?")[0]
-        else:
-            raise ValueError("DATABASE_URL inválida")
-        if ":" in host_port:
-            host, port_s = host_port.rsplit(":", 1)
-            port = int(port_s)
-        else:
-            host, port = host_port, 5432
-    else:
-        raise ValueError("Esperaba jdbc:postgresql:// o postgresql://")
+    raw = database_url.strip()
+    if raw.startswith("jdbc:"):
+        raw = raw[5:]
+    if not raw.startswith(("postgresql://", "postgres://")):
+        raw = "postgresql://" + raw.lstrip("/")
+    p = urlparse(raw)
+    host = p.hostname or "localhost"
+    port = p.port or 5432
+    db = (p.path or "/docviz").lstrip("/") or "docviz"
+    db_user = p.username or user
+    db_pass = p.password if p.password is not None else password
 
-    conn = psycopg2.connect(host=host, port=port, dbname=db, user=user, password=password)
+    tables = (
+        "docviz_task",
+        "docviz_cell_repo",
+        "docviz_cell",
+        "docviz_vector_chunk",
+    )
+    conn = psycopg2.connect(host=host, port=port, dbname=db, user=db_user, password=db_pass)
     try:
-        conn.autocommit = True
+        conn.autocommit = False
         cur = conn.cursor()
-        cur.execute("TRUNCATE TABLE docviz_vector_chunk RESTART IDENTITY CASCADE")
-        print(f"PostgreSQL: TRUNCATE docviz_vector_chunk OK ({host}:{port}/{db})")
+        cur.execute(
+            "TRUNCATE TABLE "
+            + ", ".join(tables)
+            + " RESTART IDENTITY CASCADE"
+        )
+        conn.commit()
+        print(f"PostgreSQL: TRUNCATE OK {', '.join(tables)} ({host}:{port}/{db})")
     finally:
         conn.close()
 

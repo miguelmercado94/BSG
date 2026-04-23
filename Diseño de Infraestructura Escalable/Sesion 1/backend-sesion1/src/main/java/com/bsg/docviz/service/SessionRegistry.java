@@ -1,5 +1,6 @@
 package com.bsg.docviz.service;
 
+import com.bsg.docviz.application.port.output.SessionRegistryPort;
 import com.bsg.docviz.security.CurrentUser;
 import org.springframework.stereotype.Component;
 
@@ -7,7 +8,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
-public class SessionRegistry {
+public class SessionRegistry implements SessionRegistryPort {
 
     private final Map<String, UserRepositoryState> byUser = new ConcurrentHashMap<>();
 

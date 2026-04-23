@@ -6,8 +6,9 @@ import com.bsg.docviz.dto.VectorIngestResponse;
 import com.bsg.docviz.security.CurrentUser;
 import com.bsg.docviz.security.UserIdSanitizer;
 import com.bsg.docviz.service.FileContentCache;
-import com.bsg.docviz.service.GitRepositoryService;
-import com.bsg.docviz.service.SessionRegistry;
+import com.bsg.docviz.application.port.output.GitRepositoryPort;
+import com.bsg.docviz.application.port.output.SessionRegistryPort;
+import com.bsg.docviz.util.RepoPathExclude;
 import com.bsg.docviz.util.SourceTextExtractor;
 import com.bsg.docviz.util.TextChunker;
 import org.slf4j.Logger;
@@ -35,21 +36,27 @@ public class VectorIngestService {
 
     private static final Logger log = LoggerFactory.getLogger(VectorIngestService.class);
 
+    /**
+     * Etiqueta de usuario en el almacén vectorial cuando el ámbito es el namespace de célula (índice compartido),
+     * no el usuario DocViz. Debe coincidir entre ingesta admin (namespace explícito) y consultas RAG con sesión alineada.
+     */
+    public static final String SHARED_VECTOR_USER_LABEL = "__DOCVIZ_NS__";
+
     /** Archivos a precargar por delante del actual (pila/cola acotada: 1 actual + 4 prefetch = 5). */
     private static final int PREFETCH_AHEAD = 4;
 
     private final VectorProperties props;
     private final EmbeddingClient embeddingClient;
     private final VectorStore vectorStore;
-    private final GitRepositoryService gitRepositoryService;
-    private final SessionRegistry sessionRegistry;
+    private final GitRepositoryPort gitRepositoryService;
+    private final SessionRegistryPort sessionRegistry;
 
     public VectorIngestService(
             VectorProperties props,
             EmbeddingClient embeddingClient,
             VectorStore vectorStore,
-            GitRepositoryService gitRepositoryService,
-            SessionRegistry sessionRegistry
+            GitRepositoryPort gitRepositoryService,
+            SessionRegistryPort sessionRegistry
     ) {
         this.props = props;
         this.embeddingClient = embeddingClient;
@@ -60,9 +67,167 @@ public class VectorIngestService {
 
     public String currentNamespace() {
         var s = sessionRegistry.current();
+        String ov = s.getVectorNamespaceOverride();
+        if (ov != null && !ov.isBlank()) {
+            return ov.trim();
+        }
         String user = UserIdSanitizer.forFilesystem(CurrentUser.require());
         String label = s.getRootFolderLabel() != null ? s.getRootFolderLabel() : "repo";
         return user + "__" + label.replaceAll("[^a-zA-Z0-9._-]", "_");
+    }
+
+    /**
+     * Etiqueta para upsert/query en el vector store: usuario DocViz salvo sesión con namespace de célula explícito.
+     */
+    public String currentVectorUserLabel() {
+        var s = sessionRegistry.current();
+        if (s.getVectorNamespaceOverride() != null && !s.getVectorNamespaceOverride().isBlank()) {
+            return SHARED_VECTOR_USER_LABEL;
+        }
+        return CurrentUser.require().trim();
+    }
+
+    /**
+     * Ingesta Markdown de soporte (objeto ya en S3). {@code displaySource} debe ser
+     * {@link com.bsg.docviz.support.SupportMarkdownConstants#sourceForObjectKey(String)}.
+     */
+    public VectorIngestResponse ingestSupportPlainText(String displaySource, String text) {
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        var session = sessionRegistry.current();
+        if (!session.isConnected()) {
+            throw new IllegalStateException("Not connected to a repository");
+        }
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("El Markdown está vacío");
+        }
+        String ns = currentNamespace();
+        String userLabel = currentVectorUserLabel();
+        vectorStore.deleteBySource(ns, displaySource);
+        List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
+        List<VectorRecord> batch = new ArrayList<>();
+        int[] chunksRef = new int[] {0};
+        appendEmbeddingsForParts(
+                parts,
+                displaySource,
+                ns,
+                userLabel,
+                1,
+                0,
+                displaySource,
+                null,
+                batch,
+                chunksRef);
+        if (!batch.isEmpty()) {
+            flushVectorBatch(ns, batch);
+        }
+        VectorIngestResponse r = new VectorIngestResponse();
+        r.setFilesProcessed(1);
+        r.setChunksIndexed(chunksRef[0]);
+        r.setSkipped(new ArrayList<>());
+        r.setNamespace(ns);
+        return r;
+    }
+
+    /**
+     * Indexa un borrador del área de trabajo (copia sugerida por el LLM, p. ej. {@code Foo_v1.java}) en el namespace
+     * actual. La fuente mostrada en RAG es {@code &lt;raíz-repo&gt;/workarea/&lt;nombreSeguro&gt;}.
+     */
+    public VectorIngestResponse ingestWorkAreaFile(String fileName, String content) {
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        var session = sessionRegistry.current();
+        if (!session.isConnected()) {
+            throw new IllegalStateException("Not connected to a repository");
+        }
+        if (fileName == null || fileName.isBlank()) {
+            throw new IllegalArgumentException("fileName es obligatorio");
+        }
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("El contenido está vacío");
+        }
+        String safe = sanitizeWorkAreaFileName(fileName);
+        String label = session.getRootFolderLabel() != null ? session.getRootFolderLabel() : "repo";
+        String displaySource = label + "/workarea/" + safe;
+        return ingestSupportPlainText(displaySource, content);
+    }
+
+    /**
+     * Elimina fragmentos vectoriales para la misma fuente virtual que {@link #ingestWorkAreaFile(String, String)} (p. ej.
+     * al borrar el objeto correspondiente en S3 workarea).
+     */
+    public void deleteWorkAreaRagByFileName(String fileName) {
+        if (!props.isEnabled()) {
+            return;
+        }
+        var session = sessionRegistry.current();
+        if (!session.isConnected()) {
+            return;
+        }
+        if (fileName == null || fileName.isBlank()) {
+            return;
+        }
+        String safe = sanitizeWorkAreaFileName(fileName);
+        String label = session.getRootFolderLabel() != null ? session.getRootFolderLabel() : "repo";
+        String displaySource = label + "/workarea/" + safe;
+        String ns = currentNamespace();
+        vectorStore.deleteBySource(ns, displaySource);
+    }
+
+    private static String sanitizeWorkAreaFileName(String fileName) {
+        String n = fileName.replace('\\', '/').trim();
+        int slash = n.lastIndexOf('/');
+        if (slash >= 0) {
+            n = n.substring(slash + 1);
+        }
+        if (n.isEmpty() || n.contains("..")) {
+            throw new IllegalArgumentException("Nombre de archivo inválido");
+        }
+        return n;
+    }
+
+    /**
+     * Ingesta Markdown de soporte en un namespace explícito (admin / repositorio de célula sin sesión Git).
+     * Usa {@link #SHARED_VECTOR_USER_LABEL} como etiqueta de usuario en el vector store.
+     */
+    public VectorIngestResponse ingestSupportPlainTextForNamespace(String namespace, String displaySource, String text) {
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        if (namespace == null || namespace.isBlank()) {
+            throw new IllegalArgumentException("namespace requerido");
+        }
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("El Markdown está vacío");
+        }
+        String ns = namespace.trim();
+        String userLabel = SHARED_VECTOR_USER_LABEL;
+        vectorStore.deleteBySource(ns, displaySource);
+        List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
+        List<VectorRecord> batch = new ArrayList<>();
+        int[] chunksRef = new int[] {0};
+        appendEmbeddingsForParts(
+                parts,
+                displaySource,
+                ns,
+                userLabel,
+                1,
+                0,
+                displaySource,
+                null,
+                batch,
+                chunksRef);
+        if (!batch.isEmpty()) {
+            flushVectorBatch(ns, batch);
+        }
+        VectorIngestResponse r = new VectorIngestResponse();
+        r.setFilesProcessed(1);
+        r.setChunksIndexed(chunksRef[0]);
+        r.setSkipped(new ArrayList<>());
+        r.setNamespace(ns);
+        return r;
     }
 
     /**
@@ -82,8 +247,20 @@ public class VectorIngestService {
         return ns;
     }
 
+    /** Borra todos los vectores del namespace indicado (p. ej. al descartar un repo huérfano indexado). */
+    public void clearNamespace(String namespace) {
+        if (!props.isEnabled()) {
+            return;
+        }
+        if (namespace == null || namespace.isBlank()) {
+            return;
+        }
+        vectorStore.deleteAllInNamespace(namespace.trim());
+        log.info("clearNamespace: namespace={} (store={})", namespace, vectorStore.getClass().getSimpleName());
+    }
+
     public VectorIngestResponse ingestAll() {
-        return ingestAll(null);
+        return ingestAll(null, null);
     }
 
     /**
@@ -91,6 +268,13 @@ public class VectorIngestService {
      * Si {@code onProgress} es null, no se emiten eventos.
      */
     public VectorIngestResponse ingestAll(Consumer<IngestProgressDto> onProgress) {
+        return ingestAll(onProgress, null);
+    }
+
+    /**
+     * Igual que {@link #ingestAll(Consumer)} pero fija el namespace vectorial (p. ej. repositorio de célula en BD).
+     */
+    public VectorIngestResponse ingestAll(Consumer<IngestProgressDto> onProgress, String namespaceOverride) {
         if (props.isIngestClasspathSampleOnly()) {
             return ingestClasspathSampleOnly(onProgress);
         }
@@ -107,14 +291,29 @@ public class VectorIngestService {
         }
         FileContentCache blobCache = session.getIngestContentCache();
         String rev = session.getRevisionSpec();
-        String ns = currentNamespace();
-        String userLabel = CurrentUser.require().trim();
+        String ns =
+                namespaceOverride != null && !namespaceOverride.isBlank()
+                        ? namespaceOverride.trim()
+                        : currentNamespace();
+        String userLabel =
+                namespaceOverride != null && !namespaceOverride.isBlank()
+                        ? SHARED_VECTOR_USER_LABEL
+                        : CurrentUser.require().trim();
 
         List<String> paths;
         try {
             paths = gitRepositoryService.listTrackedFiles(root, rev);
         } catch (Exception e) {
             throw new IllegalStateException("Cannot list files: " + e.getMessage(), e);
+        }
+        int pathsFromGit = paths.size();
+        paths = RepoPathExclude.filterWorkspacePaths(paths);
+        if (pathsFromGit != paths.size()) {
+            log.info(
+                    "Ingesta: excluidas {} rutas (target/, node_modules/, build/, …): {} → {} archivos",
+                    pathsFromGit - paths.size(),
+                    pathsFromGit,
+                    paths.size());
         }
 
         List<String> skipped = new ArrayList<>();
@@ -193,6 +392,7 @@ public class VectorIngestService {
                             rel,
                             parts.size());
                     String displaySource = session.getRootFolderLabel() + "/" + rel;
+                    vectorStore.deleteBySource(ns, displaySource);
                     int[] chunksRef = new int[] {chunks};
                     appendEmbeddingsForParts(
                             parts,
@@ -280,7 +480,7 @@ public class VectorIngestService {
         }
 
         String ns = currentNamespace();
-        String userLabel = CurrentUser.require().trim();
+        String userLabel = currentVectorUserLabel();
         String displaySource = "classpath:" + resourcePath;
         int totalIndexable = 1;
         List<String> skipped = new ArrayList<>();
@@ -292,6 +492,7 @@ public class VectorIngestService {
             onProgress.accept(IngestProgressDto.file(totalIndexable, 0, 0, resourcePath));
         }
 
+        vectorStore.deleteBySource(ns, displaySource);
         List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
         List<VectorRecord> batch = new ArrayList<>();
         int files = 0;

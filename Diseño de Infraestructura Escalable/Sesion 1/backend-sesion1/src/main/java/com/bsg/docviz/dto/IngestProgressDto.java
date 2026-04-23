@@ -17,6 +17,10 @@ public class IngestProgressDto {
     private String namespace;
     private List<String> skipped;
     private String error;
+    /** Metadatos finales tras crear repo de célula (NDJSON admin). */
+    private Long cellRepoId;
+    private String displayName;
+    private Boolean linkedWithoutReindex;
 
     public static IngestProgressDto start(int totalFiles) {
         IngestProgressDto d = new IngestProgressDto();
@@ -62,6 +66,22 @@ public class IngestProgressDto {
         IngestProgressDto d = new IngestProgressDto();
         d.setPhase("ERROR");
         d.setError(message);
+        return d;
+    }
+
+    /**
+     * Último evento del stream {@code POST /admin/cells/{id}/repos/stream}: fila persistida y stats finales.
+     */
+    public static IngestProgressDto cellRepoReady(CellRepoResponse r) {
+        IngestProgressDto d = new IngestProgressDto();
+        d.setPhase("CELL_REPO_READY");
+        d.setCellRepoId(r.id());
+        d.setDisplayName(r.displayName());
+        d.setLinkedWithoutReindex(r.linkedWithoutReindex());
+        d.setFilesProcessed(r.lastIngestFiles() != null ? r.lastIngestFiles() : 0);
+        d.setChunksIndexed(r.lastIngestChunks() != null ? r.lastIngestChunks() : 0);
+        d.setNamespace(r.vectorNamespace());
+        d.setSkipped(r.lastIngestSkipped() != null ? r.lastIngestSkipped() : List.of());
         return d;
     }
 
@@ -135,5 +155,29 @@ public class IngestProgressDto {
 
     public void setError(String error) {
         this.error = error;
+    }
+
+    public Long getCellRepoId() {
+        return cellRepoId;
+    }
+
+    public void setCellRepoId(Long cellRepoId) {
+        this.cellRepoId = cellRepoId;
+    }
+
+    public String getDisplayName() {
+        return displayName;
+    }
+
+    public void setDisplayName(String displayName) {
+        this.displayName = displayName;
+    }
+
+    public Boolean getLinkedWithoutReindex() {
+        return linkedWithoutReindex;
+    }
+
+    public void setLinkedWithoutReindex(Boolean linkedWithoutReindex) {
+        this.linkedWithoutReindex = linkedWithoutReindex;
     }
 }
