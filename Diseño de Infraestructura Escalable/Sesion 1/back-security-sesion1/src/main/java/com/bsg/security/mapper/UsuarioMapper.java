@@ -15,6 +15,10 @@ import org.mapstruct.NullValuePropertyMappingStrategy;
         nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
 public interface UsuarioMapper {
 
+    /** Rellenados fuera del mapper (joins / seguridad). Sin ignore, MapStruct APT puede fallar en cascada sobre tipos de colección. */
+    @Mapping(target = "rol", ignore = true)
+    @Mapping(target = "grantedAuthorities", ignore = true)
+    @Mapping(target = "authorities", ignore = true)
     Usuario toDomain(UserEntity entity);
 
     @Mapping(target = "createdAt", ignore = true)
