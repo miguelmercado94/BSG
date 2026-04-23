@@ -11,6 +11,7 @@ out/
 .classpath
 .project
 .settings/
+.vscode/
 
 # Salida temporal de sesiones locales (Gradle bootRun redirigido, etc.)
 bootrun-out.txt
