@@ -2,10 +2,12 @@ name: DocViz Sesión 1 - Docker Hub Versionado
 
 on:
   push:
+    # Se activa al subir cambios a tu rama actual o a main
     branches: 
       - BSG-DIE-SESION1
       - main
   pull_request:
+    # Se activa cuando se crea un PR hacia main
     branches: 
       - main
 
@@ -14,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Ruta raíz según tu cambio a snake-case
+  # Ruta raíz según tu cambio a snake-case (verificar minúsculas)
   SESION_ROOT: "diseño-infraestructura-escalable/sesion1"
 
 jobs:
@@ -38,6 +40,7 @@ jobs:
             security:
               - 'diseño-infraestructura-escalable/sesion1/back-security-sesion1/**'
 
+  # Job de Pruebas y Compilación (Java 21)
   test-java:
     needs: changes
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.security == 'true'
@@ -49,18 +52,21 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+
       - name: Run Maven Build
         run: |
+          # Usamos rutas relativas directas para evitar errores de ruta absoluta
           if [ "${{ needs.changes.outputs.backend }}" == "true" ]; then
             echo "Construyendo backend-sesion1..."
-            mvn -f "${{ github.workspace }}/${{ env.SESION_ROOT }}/backend-sesion1/pom.xml" clean compile -DskipTests
+            mvn -f "${{ env.SESION_ROOT }}/backend-sesion1/pom.xml" clean compile -DskipTests
           fi
           
           if [ "${{ needs.changes.outputs.security }}" == "true" ]; then
             echo "Construyendo back-security-sesion1..."
-            mvn -f "${{ github.workspace }}/${{ env.SESION_ROOT }}/back-security-sesion1/pom.xml" clean compile -DskipTests
+            mvn -f "${{ env.SESION_ROOT }}/back-security-sesion1/pom.xml" clean compile -DskipTests
           fi
 
+  # Job de Construcción y Subida a Docker Hub
   build-and-push:
     needs: [changes, test-java]
     # Se ejecuta si las pruebas pasan o si se saltaron (skipped)
@@ -96,10 +102,11 @@ jobs:
         if: steps.check.outputs.run == 'true'
         run: |
           APP_PATH="${{ env.SESION_ROOT }}/${{ matrix.project }}"
+          # Lectura dinámica de versión
           VERSION=$(cat "$APP_PATH/version.txt" | xargs)
           REPO_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.project }}"
           
-          echo "Subiendo $REPO_NAME con versión $VERSION"
+          echo "Subiendo imagen: $REPO_NAME con tag: $VERSION"
           
           docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$APP_PATH/Dockerfile" "$APP_PATH"
           docker push "$REPO_NAME:$VERSION"
