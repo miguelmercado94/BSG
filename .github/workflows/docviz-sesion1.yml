@@ -2,12 +2,10 @@ name: DocViz Sesión 1 - Docker Hub Versionado
 
 on:
   push:
-    # Se activa al subir cambios a tu rama actual o a main
     branches: 
       - BSG-DIE-SESION1
       - main
   pull_request:
-    # Se activa cuando se crea un PR hacia main
     branches: 
       - main
 
@@ -16,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Ruta raíz según tu cambio a snake-case (verificar minúsculas)
+  # Ruta base (Asegúrate de que 'diseño-infraestructura-escalable' sea el nombre real en GitHub)
   SESION_ROOT: "diseño-infraestructura-escalable/sesion1"
 
 jobs:
@@ -34,13 +32,12 @@ jobs:
         with:
           filters: |
             backend:
-              - 'diseño-infraestructura-escalable/sesion1/backend-sesion1/**'
+              - '**/backend-sesion1/**'
             frontend:
-              - 'diseño-infraestructura-escalable/sesion1/frontend-sesion1/**'
+              - '**/frontend-sesion1/**'
             security:
-              - 'diseño-infraestructura-escalable/sesion1/back-security-sesion1/**'
+              - '**/back-security-sesion1/**'
 
-  # Job de Pruebas y Compilación (Java 21)
   test-java:
     needs: changes
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.security == 'true'
@@ -55,21 +52,21 @@ jobs:
 
       - name: Run Maven Build
         run: |
-          # Usamos rutas relativas directas para evitar errores de ruta absoluta
+          # Buscamos el POM dinámicamente para evitar errores de ruta estática
           if [ "${{ needs.changes.outputs.backend }}" == "true" ]; then
-            echo "Construyendo backend-sesion1..."
-            mvn -f "${{ env.SESION_ROOT }}/backend-sesion1/pom.xml" clean compile -DskipTests
+            BACKEND_POM=$(find . -name "pom.xml" | grep "backend-sesion1" | head -n 1)
+            echo "Construyendo backend en: $BACKEND_POM"
+            mvn -f "$BACKEND_POM" clean compile -DskipTests
           fi
           
           if [ "${{ needs.changes.outputs.security }}" == "true" ]; then
-            echo "Construyendo back-security-sesion1..."
-            mvn -f "${{ env.SESION_ROOT }}/back-security-sesion1/pom.xml" clean compile -DskipTests
+            SECURITY_POM=$(find . -name "pom.xml" | grep "back-security-sesion1" | head -n 1)
+            echo "Construyendo seguridad en: $SECURITY_POM"
+            mvn -f "$SECURITY_POM" clean compile -DskipTests
           fi
 
-  # Job de Construcción y Subida a Docker Hub
   build-and-push:
     needs: [changes, test-java]
-    # Se ejecuta si las pruebas pasan o si se saltaron (skipped)
     if: |
       always() && 
       github.event_name == 'push' && 
@@ -86,6 +83,7 @@ jobs:
         id: check
         run: |
           SHOULD_RUN="false"
+          # Usamos comodines para ser flexibles con la ubicación de las carpetas
           if [[ "${{ matrix.project }}" == "back-security-sesion1" && "${{ needs.changes.outputs.security }}" == "true" ]]; then SHOULD_RUN="true"; fi
           if [[ "${{ matrix.project }}" == "backend-sesion1" && "${{ needs.changes.outputs.backend }}" == "true" ]]; then SHOULD_RUN="true"; fi
           if [[ "${{ matrix.project }}" == "frontend-sesion1" && "${{ needs.changes.outputs.frontend }}" == "true" ]]; then SHOULD_RUN="true"; fi
@@ -101,13 +99,13 @@ jobs:
       - name: Docker Build and Push
         if: steps.check.outputs.run == 'true'
         run: |
-          APP_PATH="${{ env.SESION_ROOT }}/${{ matrix.project }}"
-          # Lectura dinámica de versión
-          VERSION=$(cat "$APP_PATH/version.txt" | xargs)
+          # Buscar la ruta real de la carpeta del proyecto
+          REAL_PATH=$(find . -type d -name "${{ matrix.project }}" | head -n 1)
+          VERSION=$(cat "$REAL_PATH/version.txt" | xargs)
           REPO_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.project }}"
           
-          echo "Subiendo imagen: $REPO_NAME con tag: $VERSION"
+          echo "Construyendo imagen desde: $REAL_PATH"
           
-          docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$APP_PATH/Dockerfile" "$APP_PATH"
+          docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$REAL_PATH/Dockerfile" "$REAL_PATH"
           docker push "$REPO_NAME:$VERSION"
           docker push "$REPO_NAME:latest"
