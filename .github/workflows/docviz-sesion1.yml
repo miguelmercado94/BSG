@@ -2,12 +2,10 @@ name: DocViz Sesión 1 - Docker Hub Versionado
 
 on:
   push:
-    # Se activa al subir cambios a tu rama actual o a main
     branches: 
       - BSG-DIE-SESION1
       - main
   pull_request:
-    # Se activa cuando se crea un PR hacia main
     branches: 
       - main
 
@@ -16,7 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SESION_ROOT: "Diseño de Infraestructura Escalable/Sesion 1"
+  # Actualizado con tus nuevos nombres de carpeta sin espacios ni tildes
+  SESION_ROOT: "diseño-infraestructura-escalable/sesion1"
 
 jobs:
   changes:
@@ -33,13 +32,12 @@ jobs:
         with:
           filters: |
             backend:
-              - 'Diseño de Infraestructura Escalable/Sesion 1/backend-sesion1/**'
+              - 'diseño-infraestructura-escalable/sesion1/backend-sesion1/**'
             frontend:
-              - 'Diseño de Infraestructura Escalable/Sesion 1/frontend-sesion1/**'
+              - 'diseño-infraestructura-escalable/sesion1/frontend-sesion1/**'
             security:
-              - 'Diseño de Infraestructura Escalable/Sesion 1/back-security-sesion1/**'
+              - 'diseño-infraestructura-escalable/sesion1/back-security-sesion1/**'
 
-  # Pruebas de Java (Backend y Seguridad)
   test-java:
     needs: changes
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.security == 'true'
@@ -60,10 +58,8 @@ jobs:
             mvn -f "${{ env.SESION_ROOT }}/back-security-sesion1/pom.xml" test
           fi
 
-  # Construcción y subida a Docker Hub
   build-and-push:
     needs: [changes, test-java]
-    # Se ejecuta solo en push y si hubo cambios detectados
     if: github.event_name == 'push' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.security == 'true')
     runs-on: ubuntu-latest
     strategy:
@@ -73,7 +69,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Filtro interno de la matriz
       - name: Should run for this project
         id: check
         run: |
@@ -94,11 +89,10 @@ jobs:
         if: steps.check.outputs.run == 'true'
         run: |
           APP_PATH="${{ env.SESION_ROOT }}/${{ matrix.project }}"
-          # Leer versión del archivo y limpiar espacios
           VERSION=$(cat "$APP_PATH/version.txt" | xargs)
           REPO_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.project }}"
           
-          echo "Construyendo imagen para ${{ matrix.project }} en la ruta $APP_PATH con versión $VERSION"
+          echo "Building $REPO_NAME with version $VERSION"
           
           docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$APP_PATH/Dockerfile" "$APP_PATH"
           docker push "$REPO_NAME:$VERSION"
