@@ -42,5 +42,3 @@ Thumbs.db
 # VS Code / Cursor (preferencias locales)
 .vscode/
 
-# GitHub Actions (no versionar workflows en este repo)
-.github/workflows/
