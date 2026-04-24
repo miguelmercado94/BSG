@@ -10,6 +10,8 @@ public class GitConnectRequest {
     private String username;
     private String token;
     private String localPath;
+    /** Si viene informado (repos de célula), la sesión usa este namespace y un user_label compartido para RAG/índice. */
+    private String vectorNamespace;
 
     public GitConnectionMode getMode() {
         return mode;
@@ -49,5 +51,13 @@ public class GitConnectRequest {
 
     public void setLocalPath(String localPath) {
         this.localPath = localPath;
+    }
+
+    public String getVectorNamespace() {
+        return vectorNamespace;
+    }
+
+    public void setVectorNamespace(String vectorNamespace) {
+        this.vectorNamespace = vectorNamespace;
     }
 }

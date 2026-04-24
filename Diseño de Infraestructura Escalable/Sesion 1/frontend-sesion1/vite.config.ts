@@ -1,16 +1,58 @@
-import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import type { ProxyOptions } from "vite";
+import { defineConfig } from "vitest/config";
+
+/**
+ * POST /vector/ingest/stream puede tardar muchos minutos (NDJSON).
+ * El proxy de Node por defecto corta la conexión y el cliente nunca recibe phase DONE.
+ */
+const longRunningApiProxy: ProxyOptions = {
+  target: "http://127.0.0.1:8080",
+  changeOrigin: true,
+  /** Sin esto, el handshake WS a /api/ws/* no se reenvía y el chat RAG muestra «Error de red (WebSocket)». */
+  ws: true,
+  rewrite: (p: string) => {
+    const rest = p.replace(/^\/api/, "");
+    return "/docviz" + (rest.startsWith("/") ? rest : `/${rest}`);
+  },
+  timeout: 86_400_000,
+  proxyTimeout: 86_400_000,
+  configure(proxy) {
+    proxy.on("proxyReq", (proxyReq, req) => {
+      proxyReq.setTimeout(0);
+      req.socket?.setTimeout(0);
+    });
+    proxy.on("proxyRes", (proxyRes) => {
+      proxyRes.setTimeout(0);
+    });
+  },
+};
+
+const securityProxy: ProxyOptions = {
+  target: "http://127.0.0.1:8081",
+  changeOrigin: true,
+  rewrite: (p) => p.replace(/^\/security-api/, "/security-auth"),
+};
+
+const apiProxy = {
+  "/api": longRunningApiProxy,
+  "/security-api": securityProxy,
+};
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+  },
   server: {
     port: 5173,
-    proxy: {
-      "/api": {
-        target: "http://127.0.0.1:8080",
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api/, ""),
-      },
-    },
+    proxy: { ...apiProxy },
+  },
+  // Sin esto, `vite preview` no reenvía /api al backend y las rutas del API dan 404.
+  preview: {
+    port: 4173,
+    proxy: { ...apiProxy },
   },
 });

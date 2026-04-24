@@ -13,7 +13,12 @@ public class UserRepositoryState {
     private String revisionSpec = "HEAD";
     private TreeNodeDto treeRoot;
     private String rootFolderLabel = "";
-    private final FileContentCache contentCache = new FileContentCache();
+    /** Vista previa / RAG: independiente de la ingesta para que no compitan por los 100 MiB. */
+    private final FileContentCache viewerContentCache = new FileContentCache();
+    /** Prefetch e ingesta a Pinecone. */
+    private final FileContentCache ingestContentCache = new FileContentCache();
+    /** Namespace vectorial fijado al conectar un repo de célula (mismo valor que en BD). Índice compartido por namespace. */
+    private String vectorNamespaceOverride;
 
     public boolean isConnected() {
         return connected;
@@ -25,6 +30,11 @@ public class UserRepositoryState {
 
     public Path getManagedCloneRoot() {
         return managedCloneRoot;
+    }
+
+    /** Clon bajo context-masters (HTTPS); se puede borrar el working tree archivo a archivo sin tocar un repo local del usuario. */
+    public boolean isEphemeralManagedClone() {
+        return managedCloneRoot != null;
     }
 
     public Optional<Path> drainManagedCloneRoot() {
@@ -45,8 +55,20 @@ public class UserRepositoryState {
         return rootFolderLabel;
     }
 
-    public FileContentCache getContentCache() {
-        return contentCache;
+    public FileContentCache getViewerContentCache() {
+        return viewerContentCache;
+    }
+
+    public FileContentCache getIngestContentCache() {
+        return ingestContentCache;
+    }
+
+    public String getVectorNamespaceOverride() {
+        return vectorNamespaceOverride;
+    }
+
+    public void setVectorNamespaceOverride(String vectorNamespaceOverride) {
+        this.vectorNamespaceOverride = vectorNamespaceOverride;
     }
 
     public void disconnect() {
@@ -56,7 +78,9 @@ public class UserRepositoryState {
         treeRoot = null;
         revisionSpec = "HEAD";
         rootFolderLabel = "";
-        contentCache.clear();
+        vectorNamespaceOverride = null;
+        viewerContentCache.clear();
+        ingestContentCache.clear();
     }
 
     public void setConnected(Path root, Path managedClone, String rev, TreeNodeDto tree, String rootFolderLabel) {

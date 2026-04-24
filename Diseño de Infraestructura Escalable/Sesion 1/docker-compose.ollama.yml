@@ -1,0 +1,22 @@
+# Solo Ollama aislado (mismo puerto 11434 que el compose principal: no uses ambos a la vez).
+# Recomendado: desde la carpeta Sesion 1 usa `docker compose up -d` (incluye Ollama + pull de llama3.2 + embeddings).
+#
+# Uso de este archivo: docker compose -f docker-compose.ollama.yml up -d
+# Luego: docker exec ollama-local ollama pull llama3.2
+# API: http://127.0.0.1:11434
+#
+# Si falla el arranque por GPU en Windows, comenta la línea `gpus: all` y usa solo CPU.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-local
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    gpus: all
+
+volumes:
+  ollama_data:

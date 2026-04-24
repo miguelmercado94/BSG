@@ -1,0 +1,59 @@
+# Configuración base (solo lo común a todos los entornos).
+# R2DBC PostgreSQL, SQL init y ajustes por entorno en:
+#   application-dev.yml | application-qa.yml | application-pdn.yml (importa qa).
+
+spring:
+  application:
+    name: back-security-sesion1
+
+  profiles:
+    default: dev
+
+  webflux:
+    base-path: /security-auth
+
+  r2dbc:
+    pool:
+      initial-size: 2
+      max-size: 10
+
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      timeout: ${SPRING_DATA_REDIS_TIMEOUT:300ms}
+      connect-timeout: ${SPRING_DATA_REDIS_CONNECT_TIMEOUT:500ms}
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,info,metrics,env,loggers,threaddump,heapdump
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+jwt:
+  access-expiration-seconds: ${JWT_ACCESS_EXPIRATION_SECONDS:300}
+  refresh-expiration-seconds: ${JWT_REFRESH_EXPIRATION_SECONDS:604800}
+
+logging:
+  level:
+    root: ${LOG_LEVEL_ROOT:INFO}

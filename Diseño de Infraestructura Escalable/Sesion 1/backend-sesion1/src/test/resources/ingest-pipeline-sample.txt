@@ -1,0 +1,8 @@
+DocViz prueba de pipeline de ingesta (chunk → embedding → pgvector).
+Este texto está en src/test/resources para que las pruebas de integración
+lo lean igual que un archivo del repositorio: chunking con tamaño y solapamiento
+alineados a docviz.vector.chunk-size y chunk-overlap, embeddings con la dimensión
+configurada (p. ej. 768 para nomic-embed-text) e inserción en docviz_vector_chunk.
+
+Segundo bloque de contenido para forzar al menos otro chunk si el tamaño es pequeño.
+RAG y búsqueda por similitud usan la distancia coseno en PostgreSQL con la extensión vector.

@@ -1,23 +1,232 @@
+# Por defecto NO se incluyen `backend` ni `frontend` (perfil Compose "containerized").
+#   Infra + security + Ollama (y descarga de modelos LLM) en Docker:  docker compose up -d
+#   Modelos Ollama (opcional, .env en esta carpeta): OLLAMA_PULL_CHAT (defecto llama3.2), OLLAMA_PULL_EMBED (defecto nomic-embed-text)
+#   DocViz backend + SPA en local: Maven + npm contra localhost:5432, :11434, :4566; alinea OLLAMA_MODEL en backend-sesion1/.env con OLLAMA_PULL_CHAT.
+#   Todo en contenedores (antes):  docker compose --profile containerized up -d
 services:
+  localstack:
+    image: localstack/localstack:3
+    container_name: docviz-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      # S3 (soporte .md), DynamoDB (tokens revocados en back-security), API Gateway, Cloud Map, etc.
+      SERVICES: s3,dynamodb,apigateway,apigatewayv2,servicediscovery
+      DEBUG: "0"
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docviz-postgres
+    environment:
+      POSTGRES_USER: docviz
+      POSTGRES_PASSWORD: docviz
+      POSTGRES_DB: docviz
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docviz -d docviz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # PostgreSQL dedicado a back-security-sesion1 (WebFlux + R2DBC). Puerto host 5433 → 5432 en contenedor.
+  postgres-security:
+    image: postgres:16-alpine
+    container_name: bsg-postgres-security
+    environment:
+      POSTGRES_USER: bsg_security
+      POSTGRES_PASSWORD: bsg_security
+      POSTGRES_DB: bsg_security
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_security:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bsg_security -d bsg_security"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # Ollama (servidor LLM local). El backend en Docker usa http://ollama:11434; en local Maven usa http://127.0.0.1:11434
+  ollama:
+    image: ollama/ollama:latest
+    container_name: docviz-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  # Descarga en el servidor Ollama los modelos de chat (Llama por defecto) y embeddings; idempotente en cada up.
+  ollama-pull-models:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      PULL_CHAT: ${OLLAMA_PULL_CHAT:-llama3.2}
+      PULL_EMBED: ${OLLAMA_PULL_EMBED:-nomic-embed-text}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        export OLLAMA_HOST=http://ollama:11434
+        echo "Esperando API Ollama..."
+        for i in $$(seq 1 90); do
+          if ollama list >/dev/null 2>&1; then echo "Ollama listo."; break; fi
+          sleep 2
+        done
+        echo "Descargando chat: $$PULL_CHAT"
+        ollama pull "$$PULL_CHAT"
+        echo "Descargando embeddings: $$PULL_EMBED"
+        ollama pull "$$PULL_EMBED"
+        echo "Modelos listos."
+    restart: "no"
+
+  # FINDU / BSG — autenticación (WebFlux, puerto 8081, contexto /security-auth)
+  # Imagen local por defecto. Publicar en Hub: DOCKERHUB.md → docviz-sesion1-back-security (build -f back-security-sesion1/Dockerfile).
+  back-security:
+    build:
+      context: ./back-security-sesion1
+      dockerfile: Dockerfile
+    image: sesion1-back-security:latest
+    container_name: bsg-back-security
+    ports:
+      - "8081:8081"
+    env_file:
+      - path: ./back-security-sesion1/.env
+        required: false
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres-security:5432/bsg_security
+      SPRING_R2DBC_USERNAME: bsg_security
+      SPRING_R2DBC_PASSWORD: bsg_security
+      BSG_SECURITY_AWS_DYNAMODB_ENDPOINT: http://localstack:4566
+      BSG_SECURITY_AWS_DYNAMODB_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    depends_on:
+      postgres-security:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-sf",
+          "http://127.0.0.1:8081/security-auth/actuator/health",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+
   backend:
+    profiles:
+      - containerized
     build:
       context: ./backend-sesion1
       dockerfile: Dockerfile
+    image: sesion1-backend:latest
     container_name: docviz-backend
+    # Opcional: si no existe el archivo, Compose no falla (Docker Compose v2.24+)
+    env_file:
+      - path: ./backend-sesion1/.env
+        required: false
     ports:
       - "8080:8080"
+    # Ollama en el host o en otro contenedor con puerto publicado: acceso desde el backend
     environment:
+      # Opcional: si hubiera problemas SSL/gRPC en la imagen JRE, descomenta la siguiente línea.
+      # JAVA_TOOL_OPTIONS: "-Dio.grpc.netty.shaded.io.netty.handler.ssl.SslProvider=JDK"
       PORT: "8080"
-      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      SPRING_PROFILES_ACTIVE: local
+      # Conexión al Postgres del compose (hostname = nombre del servicio)
+      DATABASE_URL: jdbc:postgresql://postgres:5432/docviz
+      DATABASE_USER: docviz
+      DATABASE_PASSWORD: docviz
+      # Mismo compose: servicio `ollama`. Override: OLLAMA_BASE_URL=http://host.docker.internal:11434 si Ollama va en el host.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      # Alinear con ollama-pull-models (OLLAMA_PULL_CHAT en .env de Sesion 1).
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      # Evita HTTP 400 Ollama: "the input length exceeds the context length" (RAG + historial + sistema).
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
+      DOCVIZ_VECTOR_RAG_MAX_CONTEXT_CHARS: ${DOCVIZ_VECTOR_RAG_MAX_CONTEXT_CHARS:-12000}
+      # S3 (LocalStack): Markdown de soporte + embeddings en pgvector
+      DOCVIZ_SUPPORT_ENABLED: "true"
+      DOCVIZ_SUPPORT_S3_ENDPOINT: http://localstack:4566
+      # El navegador no resuelve el hostname "localstack"; las URLs presignadas deben apuntar al puerto publicado en el host.
+      DOCVIZ_SUPPORT_S3_PRESIGN_ENDPOINT: http://127.0.0.1:4566
+      DOCVIZ_SUPPORT_S3_REGION: us-east-1
+      DOCVIZ_SUPPORT_S3_BUCKET: soporte
+      DOCVIZ_WORKSPACE_S3_BORRADOR_BUCKET: borradores
+      DOCVIZ_WORKSPACE_S3_WORKAREA_BUCKET: workarea
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      # Binario git en la imagen Alpine (evita ENOENT si PATH del JRE no incluye /usr/bin)
+      DOCVIZ_CONTEXT_MASTERS_GIT_EXECUTABLE: /usr/bin/git
+      # Firestore: JSON montado en volumes (Sesion 1/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json → /run/secrets/...)
+      FIREBASE_ENABLED: ${FIREBASE_ENABLED:-true}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-sesion-bsg}
+      FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-/run/secrets/firebase-adminsdk.json}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/run/secrets/firebase-adminsdk.json}
+      # Gemini en la misma imagen: SPRING_PROFILES_ACTIVE=develop + GEMINI_API_KEY (ver application-develop.properties).
+    depends_on:
+      ollama:
+        condition: service_started
+      ollama-pull-models:
+        condition: service_completed_successfully
+      localstack:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json:/run/secrets/firebase-adminsdk.json:ro
+    restart: unless-stopped
 
   frontend:
+    profiles:
+      - containerized
     build:
       context: ./frontend-sesion1
       dockerfile: Dockerfile
+    image: sesion1-frontend:latest
     container_name: docviz-frontend
+    # Valores por defecto del build (Vite). En nube: BACKEND_URL / SECURITY_URL absolutos (ver frontend Dockerfile + docker/50-runtime-config.sh).
+    environment:
+      BACKEND_URL: ${FRONTEND_BACKEND_URL:-}
+      SECURITY_URL: ${FRONTEND_SECURITY_URL:-}
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      back-security:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  pgdata_security:
+  localstack_data:
+  ollama_data:
