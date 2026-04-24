@@ -107,10 +107,17 @@ export function clearAuthSession(): void {
 }
 
 function securityBase(): string {
+  const fromRuntime =
+    typeof window !== "undefined"
+      ? (window as Window & { __DOCVIZ_SECURITY_BASE__?: string }).__DOCVIZ_SECURITY_BASE__
+      : undefined;
+  if (fromRuntime != null && String(fromRuntime).trim() !== "") {
+    return String(fromRuntime).trim().replace(/\/$/, "");
+  }
   const v = import.meta.env.VITE_SECURITY_URL;
   if (v === undefined || String(v).trim() === "") {
     throw new Error(
-      "Falta VITE_SECURITY_URL (p. ej. /security-api con proxy Vite → back-security en :8081).",
+      "Falta la base del security: en Docker define SECURITY_URL (o VITE_SECURITY_URL en build; p. ej. /security-api con proxy).",
     );
   }
   return String(v).trim().replace(/\/$/, "");

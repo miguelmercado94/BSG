@@ -1,4 +1,0 @@
-# clean_all_databases.py, cleanup_dev_data.py (limpieza local)
-psycopg2-binary>=2.9.9
-google-cloud-firestore>=2.16.0
-boto3>=1.34.0

@@ -38,3 +38,9 @@ backend-sesion1/application-local.properties
 .DS_Store
 Thumbs.db
 .idea/
+
+# VS Code / Cursor (preferencias locales)
+.vscode/
+
+# GitHub Actions (no versionar workflows en este repo)
+.github/workflows/

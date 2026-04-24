@@ -16,6 +16,3 @@ out/
 # Salida temporal de sesiones locales (Gradle bootRun redirigido, etc.)
 bootrun-out.txt
 bootrun-err.txt
-
-# Caché Python (por si se añaden scripts .py en scripts/)
-scripts/__pycache__/

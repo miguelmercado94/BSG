@@ -2,24 +2,35 @@ package com.bsg.security.mapper;
 
 import com.bsg.security.domain.model.Modulo;
 import com.bsg.security.infrastructure.entity.ModuleEntity;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.MappingConstants;
-import org.mapstruct.NullValuePropertyMappingStrategy;
+import org.springframework.stereotype.Component;
 
 /**
- * Mapeo entre modelo de dominio Modulo y entidad ModuleEntity (MapStruct).
- * Los campos de auditoría solo existen en la entidad; se ignoran al mapear dominio → entidad.
+ * Mapeo Modulo ↔ {@link ModuleEntity}. Implementación manual para evitar fallos del APT MapStruct/Eclipse ({@code ArrayList} en cascada).
  */
-@Mapper(componentModel = MappingConstants.ComponentModel.SPRING,
-        nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
-public interface ModuloMapper {
+@Component
+public class ModuloMapper {
 
-    Modulo toDomain(ModuleEntity entity);
+    public Modulo toDomain(ModuleEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        Modulo modulo = new Modulo();
+        modulo.setId(entity.getId());
+        modulo.setName(entity.getName());
+        modulo.setPathBase(entity.getPathBase());
+        modulo.setActive(entity.isActive());
+        return modulo;
+    }
 
-    @Mapping(target = "createdAt", ignore = true)
-    @Mapping(target = "updatedAt", ignore = true)
-    @Mapping(target = "createdBy", ignore = true)
-    @Mapping(target = "updatedBy", ignore = true)
-    ModuleEntity toEntity(Modulo domain);
+    public ModuleEntity toEntity(Modulo domain) {
+        if (domain == null) {
+            return null;
+        }
+        ModuleEntity entity = new ModuleEntity();
+        entity.setId(domain.getId());
+        entity.setName(domain.getName());
+        entity.setPathBase(domain.getPathBase());
+        entity.setActive(domain.isActive());
+        return entity;
+    }
 }

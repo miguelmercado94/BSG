@@ -2,24 +2,33 @@ package com.bsg.security.mapper;
 
 import com.bsg.security.domain.model.Rol;
 import com.bsg.security.infrastructure.entity.RoleEntity;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.MappingConstants;
-import org.mapstruct.NullValuePropertyMappingStrategy;
+import org.springframework.stereotype.Component;
 
 /**
- * Mapeo entre modelo de dominio Rol y entidad RoleEntity (MapStruct).
- * Los campos de auditoría solo existen en la entidad; se ignoran al mapear dominio → entidad.
+ * Mapeo Rol ↔ {@link RoleEntity}. Implementación manual para evitar fallos del APT de MapStruct/Eclipse en este proyecto (errores en cascada sobre tipos como {@code ArrayList}).
  */
-@Mapper(componentModel = MappingConstants.ComponentModel.SPRING,
-        nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
-public interface RolMapper {
+@Component
+public class RolMapper {
 
-    Rol toDomain(RoleEntity entity);
+    public Rol toDomain(RoleEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        Rol rol = new Rol();
+        rol.setId(entity.getId());
+        rol.setName(entity.getName());
+        rol.setActive(entity.isActive());
+        return rol;
+    }
 
-    @Mapping(target = "createdAt", ignore = true)
-    @Mapping(target = "updatedAt", ignore = true)
-    @Mapping(target = "createdBy", ignore = true)
-    @Mapping(target = "updatedBy", ignore = true)
-    RoleEntity toEntity(Rol domain);
+    public RoleEntity toEntity(Rol domain) {
+        if (domain == null) {
+            return null;
+        }
+        RoleEntity entity = new RoleEntity();
+        entity.setId(domain.getId());
+        entity.setName(domain.getName());
+        entity.setActive(domain.isActive());
+        return entity;
+    }
 }

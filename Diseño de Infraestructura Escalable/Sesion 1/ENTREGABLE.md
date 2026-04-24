@@ -5,7 +5,7 @@
 **Frontend (aplicación pública):**  
 https://docviz-sesion1-frontend-production.up.railway.app/
 
-*(El backend API está desplegado por separado en Railway; el frontend se construye con `VITE_API_URL` apuntando a esa URL del API. El backend usa **Java 21+** — Spring Boot 3, hilos virtuales opcionales, perfiles Maven `local` / `develop` alineados con perfiles Spring `local` / `develop`.)*
+*(El backend API está desplegado por separado en Railway; el frontend usa `BACKEND_URL` / `SECURITY_URL` en runtime (contenedor) o `VITE_*` en build. El backend usa **Java 21+** — Spring Boot 3, hilos virtuales opcionales; **una sola imagen** con Ollama y Gemini en el classpath; el modo lo elige `SPRING_PROFILES_ACTIVE` en runtime.)*
 
 ---
 
@@ -22,28 +22,16 @@ Quiero que implementes y dejes listo para producción en Railway un asistente RA
 - Hilos virtuales de Java 21: en application.properties incluye `spring.threads.virtual.enabled=true` (si el entorno de despliegue falla, documentar fallback a `false`).
 - Extracción de texto de PDF en servidor: Apache PDFBox (u equivalente) para que los PDF dentro del repo pasen al pipeline de chunks.
 
-=== PERFILES MAVEN (dependencias mutuamente excluyentes) ===
-El pom.xml debe definir DOS perfiles Maven; solo uno activo al empaquetar:
+=== CHAT OLLAMA / GEMINI (un solo JAR / imagen Docker) ===
+- El `pom.xml` incluye en el classpath `spring-ai-starter-model-ollama` y `spring-ai-starter-model-google-genai`. No uses perfiles Maven para excluir uno u otro en la imagen Docker.
+- Comando típico: `mvn package` o `./mvnw package` (sin `-P` para elegir chat).
 
-1) Perfil Maven `local` (activo por defecto con <activeByDefault>true</activeByDefault>):
-   - Dependencia: `spring-ai-starter-model-ollama`.
-   - Uso: desarrollo local con Ollama en `http://127.0.0.1:11434` (o URL configurable).
-   - Comando típico: `mvn package` o `./mvnw package` (sin flags extra).
-
-2) Perfil Maven `develop`:
-   - Dependencia: `spring-ai-starter-model-google-genai` (Gemini vía API key).
-   - Uso: Railway / nube. Debes DESactivar `local` y activar `develop` en el mismo comando.
-   - Comando (bash): mvn -P'!local,develop' package
-   - En PowerShell las comillas ayudan con el carácter `!`: mvn -P"!local,develop" package
-
-Nunca mezcles ambos starters en el mismo JAR: el perfil Maven decide qué implementación de chat se empaqueta.
-
-=== PERFILES SPRING (deben coincidir con el JAR construido) ===
+=== PERFILES SPRING (solo runtime: compose, Railway, .env) ===
 - Propiedad global: `spring.profiles.active=${SPRING_PROFILES_ACTIVE:local}`.
-- Archivo `application-local.properties` (perfil Spring `local`): debe cargarse cuando el JAR se construyó con perfil Maven `local`. Configurar `spring.ai.model.chat=ollama`, `spring.ai.ollama.base-url`, `spring.ai.ollama.chat.options.model`.
-- Archivo `application-develop.properties` (perfil Spring `develop`): cuando el JAR se construyó con Maven `develop`. Configurar `spring.ai.model.chat=google-genai`, `spring.ai.google.genai.api-key=${GEMINI_API_KEY:}`, `spring.ai.google.genai.chat.options.model=${GEMINI_MODEL:gemini-2.5-flash}` (u modelo acordado).
+- `application-local.properties` (Spring `local`): `spring.ai.model.chat=ollama`, URLs y modelos Ollama.
+- `application-develop.properties` (Spring `develop`): `spring.ai.model.chat=google-genai`, `GEMINI_API_KEY`, `GEMINI_MODEL`, etc.
 
-Regla crítica: si compilas con `-P'!local,develop'`, en runtime debes exportar `SPRING_PROFILES_ACTIVE=develop`. Si compilas con perfil `local`, en runtime `SPRING_PROFILES_ACTIVE=local` (o por defecto). Inconsistencia Maven/Spring = fallo al arrancar o bean faltante.
+Regla: `SPRING_PROFILES_ACTIVE=local` usa Ollama; `develop` usa Gemini. La misma imagen sirve para ambos.
 
 === application.properties (núcleo compartido) ===
 Incluir al menos:
@@ -67,21 +55,21 @@ Opcional local: cargar `.env` con springboot3-dotenv o equivalente para `PINECON
 - Chat RAG: embedding de la pregunta → top-k Pinecone → prompt con contexto → respuesta (Gemini en nube u Ollama en local según perfiles).
 
 === FRONTEND ===
-- React + TypeScript + Vite. Variable de entorno de build `VITE_API_URL` = URL absoluta del backend SIN barra final. El cliente HTTP debe usar esa base y enviar `X-DocViz-User`.
+- React + TypeScript + Vite. Bases del API: `VITE_API_URL` y `VITE_SECURITY_URL` en build, o `BACKEND_URL` y `SECURITY_URL` en el contenedor Nginx (script `docker-entrypoint.d` + `envsubst`). El cliente HTTP debe enviar `X-DocViz-User`.
 - Pantallas: conexión al repo, workspace con árbol de archivos, visualizador de código, panel de consulta RAG con estado de índice.
-- Dockerfile: build de Vite con ARG `VITE_API_URL`, Nginx sirviendo estáticos; en Railway NO confiar en un hostname interno `backend` — el navegador llama al API público (CORS).
+- Dockerfile: build de Vite; Nginx sirve estáticos; en Railway el navegador llama a URLs públicas (CORS), no a un hostname interno `backend`.
 
 === DOCKER BACKEND ===
 - Imagen build: `maven:...-temurin-21`, imagen runtime: `eclipse-temurin:21-jre-...`.
-- ARG `MAVEN_PROFILES`: por defecto `local` para builds locales; para producción Gemini usar `!local,develop` (entre comillas en Docker/build si hace falta).
+- Build Maven sin perfiles para chat: `mvn package`. Configuración solo por variables de entorno (`SPRING_PROFILES_ACTIVE`, `GEMINI_*`, `OLLAMA_*`, etc.) en compose o plataforma.
 - Incluir `git` en la imagen runtime si el servidor clona o actualiza repos.
 - HEALTHCHECK con `wget`/`curl` contra `http://127.0.0.1:${PORT}/...` y cabecera `X-DocViz-User`.
 
 === DESPLIEGUE RAILWAY ===
 - Dos servicios, mismo repositorio: Root Directory `backend-sesion1` y `frontend-sesion1`.
-- Backend: variable `SPRING_PROFILES_ACTIVE=develop`; `GEMINI_API_KEY`, `GEMINI_MODEL` (opcional); `PINECONE_API_KEY`; resto según `application.properties`. Build Docker con `MAVEN_PROFILES='!local,develop'` (o sintaxis que acepte la plataforma).
-- Frontend: build arg `VITE_API_URL=https://<URL-PÚBLICA-DEL-BACKEND>`.
-- Orden: desplegar backend → copiar URL HTTPS → construir frontend con esa URL.
+- Backend: `SPRING_PROFILES_ACTIVE=develop`; `GEMINI_API_KEY`, `GEMINI_MODEL` (opcional); `PINECONE_API_KEY`; resto según `application.properties`. Sin build-args Maven en la imagen.
+- Frontend: variables `BACKEND_URL` y `SECURITY_URL` en el servicio (o build-args `VITE_*` equivalentes).
+- Orden: desplegar backend → copiar URLs HTTPS → configurar frontend.
 
 === ENTREGABLE TÉCNICO ===
 - `./mvnw` (o `mvn`) y `npm run build` sin errores; Dockerfiles probados; documentación breve (p. ej. RAILWAY.md) con tabla de variables y perfiles.

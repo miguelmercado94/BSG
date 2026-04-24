@@ -1,8 +1,9 @@
-# FINDU Spring Security — imagen runtime (JRE 21).
-# Perfil Spring (dev | qa | pdn) y resto de variables: .env + docker-compose (env_file / environment).
+# BSG back-security-sesion1 — imagen runtime (JRE 21).
+# Perfil Spring (dev | qa | pdn) y variables: .env + docker-compose (env_file / environment).
 #
-# Build manual:
-#   docker build -t back-security-sesion1:local .
+# Docker Hub (desde carpeta Sesion 1): ver ../DOCKERHUB.md — imagen docviz-sesion1-back-security.
+# Build local:
+#   docker build -t sesion1-back-security:latest .
 
 FROM eclipse-temurin:21-jdk-jammy AS builder
 WORKDIR /workspace

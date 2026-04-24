@@ -1,6 +1,8 @@
 # back-security-sesion1
 
-Servicio de autenticación y autorización (**BSG**, Sesión 1): API reactiva (**Spring WebFlux**), persistencia **R2DBC** sobre **PostgreSQL**, emisión y validación de **JWT**, y soporte opcional de **Redis** (caché de revocación de tokens) y **DynamoDB** (registro persistente de tokens revocados, p. ej. LocalStack o AWS). Derivado del proyecto `findu-spring-security`, renombrado y reubicado en este repositorio.
+Servicio de autenticación y autorización (**BSG**, Sesión 1): API reactiva (**Spring WebFlux**), persistencia **R2DBC** sobre **PostgreSQL**, emisión y validación de **JWT**, y soporte opcional de **Redis** (caché de revocación de tokens) y **DynamoDB** (tokens revocados; p. ej. LocalStack o AWS).
+
+Los mapeos dominio ↔ entidad (`UsuarioMapper`, `RolMapper`, etc.) son clases **`@Component`** escritas a mano (sin MapStruct en estos tipos), para evitar fallos del procesador de anotaciones en algunos IDEs.
 
 ---
 
@@ -8,17 +10,17 @@ Servicio de autenticación y autorización (**BSG**, Sesión 1): API reactiva (*
 
 ### Visión por capas
 
-El código sigue una organización tipo **hexagonal / limpia**, con dependencias hacia el dominio y puertos que aislan la infraestructura.
+Organización tipo **hexagonal**, con dependencias hacia el dominio y puertos que aislan la infraestructura.
 
 | Capa | Paquete principal | Rol |
-|------|---------------------|-----|
-| **Presentación** | `com.bsg.security.presentation` | Controladores WebFlux, DTOs de entrada/salida, contratos HTTP. |
-| **Aplicación** | `com.bsg.security.application` | Casos de uso, servicios de aplicación, **puertos** (interfaces hacia fuera: persistencia, caché, etc.). |
-| **Dominio** | `com.bsg.security.domain` | Modelos y reglas de negocio independientes de frameworks. |
-| **Infraestructura** | `com.bsg.security.infrastructure` | **Adaptadores**: repositorios R2DBC, clientes Redis/DynamoDB, integraciones. |
-| **Configuración** | `com.bsg.security.config` | Seguridad (Spring Security reactivo), JWT, Redis, DynamoDB, propiedades. |
+|------|-------------------|-----|
+| **Presentación** | `com.bsg.security.presentation` | Controladores WebFlux, contratos HTTP. |
+| **Aplicación** | `com.bsg.security.application` | Casos de uso, **puertos** (persistencia, caché, etc.). |
+| **Dominio** | `com.bsg.security.domain` | Modelos y reglas independientes del framework. |
+| **Infraestructura** | `com.bsg.security.infrastructure` | Adaptadores R2DBC, Redis, DynamoDB. |
+| **Configuración** | `com.bsg.security.config` | Seguridad reactiva, JWT, propiedades. |
 
-Los **puertos** de salida (por ejemplo revocación de tokens o usuarios) viven en `application.port.output`; las implementaciones concretas en `infrastructure.adapter`.
+Los **puertos** de salida están en `application.port.output`; las implementaciones en `infrastructure.adapter`.
 
 ### Flujo de datos (resumen)
 
@@ -46,23 +48,23 @@ flowchart LR
 
 ### Componentes opcionales (Redis y DynamoDB)
 
-| Funcionalidad | Con `bsg.security.redis.enabled=true` | Con `bsg.security.redis.enabled=false` |
-|---------------|--------------------------------|----------------------------------|
-| Caché de revocación (rápida) | `RedisTokenRevocationCacheAdapter` | `NoOpTokenRevocationCacheAdapter` (sin caché Redis) |
+| Funcionalidad | Redis activado | Redis desactivado (`dev`) |
+|---------------|----------------|---------------------------|
+| Caché de revocación | `RedisTokenRevocationCacheAdapter` | `NoOpTokenRevocationCacheAdapter` |
 
-| Funcionalidad | Con `bsg.security.aws.dynamodb.enabled=true` | Con `bsg.security.aws.dynamodb.enabled=false` |
-|---------------|----------------------------------------|----------------------------------------|
-| Persistencia de tokens revocados | Adaptador DynamoDB + cliente async | `InMemoryRevokedTokenRepositoryAdapter` (solo en memoria en el proceso) |
+| Funcionalidad | DynamoDB activado | DynamoDB desactivado (`dev`) |
+|---------------|-------------------|-------------------------------|
+| Tokens revocados persistentes | Adaptador DynamoDB | En memoria en el proceso |
 
-En **desarrollo local** suele usarse el perfil **`dev`**, que **desactiva Redis a nivel de Spring** (excluye la autoconfiguración de Redis) y deja DynamoDB desactivado por defecto, evitando levantar Redis, LocalStack o AWS.
+En **desarrollo local** suele usarse el perfil **`dev`**, que excluye la autoconfiguración de Redis y deja DynamoDB desactivado por defecto.
 
 ### Perfiles Spring
 
 | Perfil | Uso típico | PostgreSQL | SQL init | Redis | DynamoDB |
 |--------|------------|------------|----------|-------|----------|
-| **`dev`** | Máquina del desarrollador | Local o contenedor | `always` por defecto (schema + data en cada arranque) | **Desactivado** (autoconfig excluida) | **Desactivado** por defecto |
-| **`qa`** | Integración / compose completo | Configurable por env | `never` por defecto | Activado por variable (`BSG_SECURITY_REDIS_ENABLED`) | Activado por variable (`BSG_SECURITY_AWS_DYNAMODB_ENABLED`) |
-| **`pdn`** | Producción | Configurable | `never` | Obligatorio (revocación en caché) | Según `qa` importado |
+| **`dev`** | Desarrollo | Local / Docker (`localhost:5433`, BD `bsg_security`) | `always` por defecto | Desactivado (autoconfig excluida) | Desactivado por defecto |
+| **`qa`** | Integración / compose | Configurable | `never` por defecto | Según variables | Según variables |
+| **`pdn`** | Producción | Configurable | `never` | Obligatorio según despliegue | Según despliegue |
 
 El perfil por defecto en `application.yml` es **`dev`**.
 
@@ -70,108 +72,82 @@ El perfil por defecto en `application.yml` es **`dev`**.
 
 ## Requisitos
 
-- **JDK 21** (alineado con `build.gradle` y Docker).
-- **PostgreSQL** accesible (versión compatible con el driver R2DBC del proyecto; 16 es la usada en Docker Compose del monorepo).
-- Opcional: **Redis** y emulador **DynamoDB** (p. ej. LocalStack) solo si quieres paridad con entornos `qa` / nube.
+- **JDK 21** (`java.toolchain` en `build.gradle`).
+- **PostgreSQL** (en Sesión 1, el servicio Docker `postgres-security` expone **`localhost:5433`** → BD **`bsg_security`**).
+- Opcional: **Redis** y **LocalStack** (DynamoDB) para paridad con `qa` / nube.
 
 ---
 
 ## PostgreSQL en local
 
-### Opción A: solo base de datos con Docker (recomendada para no instalar el servidor)
+### Opción A: Docker (recomendada)
 
-Desde la raíz del monorepo (`FINDU-PROJECT`), puedes levantar únicamente Postgres:
+Desde la carpeta **`Sesion 1`** del repositorio (donde está `docker-compose.yml`):
 
 ```bash
-docker compose up -d postgres
+docker compose up -d postgres-security
 ```
 
-Por defecto (o vía `.env` en la raíz, copiado desde `.env.example`):
+Valores por defecto alineados con `application-dev.yml`:
 
-- Host: `localhost`
-- Puerto: `5432`
-- Base de datos: `findu`
-- Usuario / contraseña: `findu` / `findu`
+| | |
+|--|--|
+| Host | `localhost` |
+| Puerto | **`5433`** (mapeo host → contenedor `5432`) |
+| Base de datos | **`bsg_security`** |
+| Usuario / contraseña | **`bsg_security`** / **`bsg_security`** |
 
-Ajusta `SPRING_R2DBC_*` si usas otros valores.
+Variables R2DBC: ver `SPRING_R2DBC_*` en `.env.example` de este módulo.
 
-### Opción B: PostgreSQL instalado en el sistema (Windows / Linux / macOS)
+### Opción B: PostgreSQL instalado en el sistema
 
-1. Instala PostgreSQL desde el instalador oficial o el gestor de paquetes de tu SO.
-2. Crea rol y base de datos, por ejemplo:
+Crea rol y base coherente con lo anterior, por ejemplo:
 
 ```sql
-CREATE USER findu WITH PASSWORD 'findu';
-CREATE DATABASE findu OWNER findu;
+CREATE USER bsg_security WITH PASSWORD 'bsg_security';
+CREATE DATABASE bsg_security OWNER bsg_security;
 ```
 
-3. Con el perfil **`dev`**, el arranque ejecuta `schema.sql` y `data.sql` si `SPRING_SQL_INIT_MODE` es `always` (valor por defecto en `application-dev.yml`).
-
-Si cargas el esquema a mano, puedes poner `SPRING_SQL_INIT_MODE=never` y usar los scripts en `src/main/resources/schema.sql` y `data.sql` como referencia.
+Con perfil **`dev`**, si `SPRING_SQL_INIT_MODE` es `always`, se ejecutan `schema.sql` y `data.sql` del classpath. Para cargar solo a mano: `SPRING_SQL_INIT_MODE=never` y ejecutar los SQL de `src/main/resources/` con tu cliente (`psql`, DBeaver, etc.).
 
 ---
 
-## Ejecutar la aplicación en local (sin Redis ni DynamoDB)
+## Ejecutar en local (sin Redis ni DynamoDB)
 
-La forma soportada para **no** usar Redis ni DynamoDB es el perfil **`dev`** (no basta con toggles sueltos en `qa`: en `qa` la autoconfiguración de Redis sigue activa y un Redis caído puede afectar arranque o salud).
+Usa el perfil **`dev`** (valor por defecto).
 
-### Variables mínimas
-
-Copia `.env.example` a `.env` en esta carpeta (`SECURITY/back-security-sesion1/.env`) y revisa al menos:
-
-- Conexión R2DBC (por defecto en `application-dev.yml` apunta a `localhost:5432/findu`).
-- `BSG_SECURITY_AWS_DYNAMODB_ENABLED=false` (ya es el valor por defecto en `dev`).
-- No necesitas Redis: en `dev`, `bsg.security.redis.enabled=false` y la autoconfiguración de Redis está excluida.
-
-### Arranque con Gradle
+1. Copia `.env.example` → `.env` en esta carpeta y revisa `SPRING_R2DBC_*` si tu Postgres no es `localhost:5433/bsg_security`.
+2. Arranque con Gradle:
 
 ```bash
-cd SECURITY/back-security-sesion1
 ./gradlew bootRun
 ```
 
-En Windows:
+Windows:
 
 ```powershell
 .\gradlew.bat bootRun
 ```
 
-Asegúrate de tener activo el perfil `dev` (por defecto en `application.yml`) o exporta:
-
-```bash
-set SPRING_PROFILES_ACTIVE=dev
-```
-
-### URLs útiles (por defecto)
+### URLs útiles
 
 | Recurso | URL |
 |---------|-----|
-| Base path de la API | `http://localhost:8081/security-auth` |
+| Base path API | `http://localhost:8081/security-auth` |
 | Actuator health | `http://localhost:8081/security-auth/actuator/health` |
 | OpenAPI | `http://localhost:8081/security-auth/v3/api-docs` |
 | Swagger UI | `http://localhost:8081/security-auth/swagger-ui.html` |
 
-Puerto y `base-path` vienen de `application.yml`; no hace falta duplicarlos en `.env` salvo que quieras sobrescribirlos por entorno.
-
 ---
 
-## Activar Redis o DynamoDB en local (opcional)
+## Redis o DynamoDB en local (opcional)
 
-### Redis
+- **Redis**: perfiles `qa`/`pdn` con Redis alcanzable y variables `BSG_SECURITY_REDIS_*` / Spring Data Redis.
+- **DynamoDB (LocalStack)**: `BSG_SECURITY_AWS_DYNAMODB_ENABLED=true` y `BSG_SECURITY_AWS_DYNAMODB_ENDPOINT=http://localhost:4566` (u otro endpoint del emulador).
 
-- Perfil **`qa`** (o **`pdn`**) con `BSG_SECURITY_REDIS_ENABLED=true` y un Redis alcanzable (`SPRING_DATA_REDIS_HOST` / `SPRING_DATA_REDIS_PORT`).
-- En **`dev`**, Redis está desactivado por diseño; para probar Redis en local suele usarse **`qa`** contra un Redis en Docker (`docker compose up -d redis`) y Postgres ya migrado/poblado según tu flujo (`SPRING_SQL_INIT_MODE`).
+### Stack completo Sesión 1
 
-### DynamoDB (p. ej. LocalStack)
-
-- Pon `BSG_SECURITY_AWS_DYNAMODB_ENABLED=true` y `BSG_SECURITY_AWS_DYNAMODB_ENDPOINT` apuntando a LocalStack (p. ej. `http://localhost:4566`).
-- El cliente usa credenciales de prueba fijas en código para entornos locales/emulados (ver `DynamoDbClientConfig`).
-
-### Stack completo con Docker Compose
-
-En la raíz `FINDU-PROJECT`, `docker-compose.yml` levanta Postgres, LocalStack (DynamoDB), Redis y la imagen de este servicio. Variables de compose: ver `.env.example` en la raíz y `SECURITY/back-security-sesion1/.env.example` para la app.
-
-- Con **`SPRING_PROFILES_ACTIVE=qa`** (típico en compose), Redis y DynamoDB suelen ir **activados** salvo que los anules en `.env`.
+En **`Sesion 1/docker-compose.yml`** están definidos Postgres Security, LocalStack, Redis (según perfil), backend DocViz, este servicio y el frontend con perfil `containerized`. Variables: `.env` en `Sesion 1` y `.env` en `back-security-sesion1`.
 
 ---
 
@@ -182,13 +158,17 @@ En la raíz `FINDU-PROJECT`, `docker-compose.yml` levanta Postgres, LocalStack (
 ./gradlew bootJar
 ```
 
-La imagen Docker se construye desde el `Dockerfile` en este directorio (usada por el `docker-compose.yml` del monorepo).
+### Docker e imagen en Docker Hub
 
----
+- **`Dockerfile`** en este directorio. En **`Sesion 1/docker-compose.yml`** la etiqueta local es `sesion1-back-security:latest`.
+- Para publicar en Docker Hub (misma convención que backend/frontend DocViz), desde la carpeta **`Sesion 1`**:
 
-## Documentación adicional
+```bash
+docker build -t TU_USUARIO/docviz-sesion1-back-security:latest -f back-security-sesion1/Dockerfile back-security-sesion1
+docker push TU_USUARIO/docviz-sesion1-back-security:latest
+```
 
-En el monorepo: `docs/FINDU-spring-security-documentacion.md` (si está presente en tu clon).
+Detalle: **[DOCKERHUB.md](../DOCKERHUB.md)**.
 
 ---
 
@@ -196,7 +176,6 @@ En el monorepo: `docs/FINDU-spring-security-documentacion.md` (si está presente
 
 | Objetivo | Acción |
 |----------|--------|
-| Solo IDE + Postgres, sin Redis ni Dynamo | Perfil **`dev`**, PostgreSQL en marcha, `./gradlew bootRun` |
-| Paridad con integración (Redis + Dynamo local) | Perfil **`qa`**, LocalStack + Redis + Postgres (p. ej. `docker compose up`) |
-| Desactivar Dynamo en un perfil que lo permita por variable | `BSG_SECURITY_AWS_DYNAMODB_ENABLED=false` |
-| Redis “apagado” de verdad en local | Usar **`dev`** (no solo `BSG_SECURITY_REDIS_ENABLED=false` en **`qa`** si no quieres depender de Redis) |
+| IDE + Postgres en Docker (`5433`) sin Redis/Dynamo | Perfil **`dev`**, `docker compose up -d postgres-security`, `./gradlew bootRun` |
+| Paridad integración | Perfil **`qa`** + servicios en Compose |
+| Dynamo desactivado | `BSG_SECURITY_AWS_DYNAMODB_ENABLED=false` (ya en `dev`) |

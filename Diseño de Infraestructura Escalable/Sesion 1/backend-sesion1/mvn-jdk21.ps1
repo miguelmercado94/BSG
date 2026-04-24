@@ -1,4 +1,7 @@
-# Ejecuta mvnw.cmd con JAVA_HOME en JDK 21. Ejemplo: .\mvn-jdk21.ps1 -q compile -DskipTests
+# Ejecuta mvnw.cmd con JAVA_HOME en JDK 21. Ejemplos:
+#   .\mvn-jdk21.ps1 -q compile -DskipTests
+#   .\mvn-jdk21.ps1 spring-boot:run
+# (arranque local con Ollama/S3: ver run-backend-local.ps1)
 
 $ErrorActionPreference = "Stop"
 $jdk = if ($env:DOCVIZ_JDK21) { $env:DOCVIZ_JDK21 } else { "C:\Program Files\Java\jdk-21" }

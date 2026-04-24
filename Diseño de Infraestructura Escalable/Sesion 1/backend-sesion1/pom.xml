@@ -110,6 +110,11 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-ollama</artifactId>
         </dependency>
+        <!-- Misma imagen Docker / JAR: el modo Ollama vs Gemini lo fija SPRING_PROFILES_ACTIVE en runtime (compose, Railway, .env). -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-google-genai</artifactId>
+        </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
@@ -126,31 +131,6 @@
             <version>6.10.0.202406032230-r</version>
         </dependency>
     </dependencies>
-
-    <!--
-      Perfiles Maven (chat, excluyentes):
-      - local (activo por defecto): perfil Spring "local" + Ollama (starter ya en dependencias base).
-      - develop: Google Gemini + perfil Spring "develop".
-
-      Para Gemini: mvn -P"!local,develop" package
-    -->
-    <profiles>
-        <profile>
-            <id>local</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-        </profile>
-        <profile>
-            <id>develop</id>
-            <dependencies>
-                <dependency>
-                    <groupId>org.springframework.ai</groupId>
-                    <artifactId>spring-ai-starter-model-google-genai</artifactId>
-                </dependency>
-            </dependencies>
-        </profile>
-    </profiles>
 
     <build>
         <plugins>

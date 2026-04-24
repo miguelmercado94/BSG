@@ -1,1 +1,2 @@
 window.__DOCVIZ_API_BASE__="${BACKEND_URL}";
+window.__DOCVIZ_SECURITY_BASE__="${SECURITY_URL}";

@@ -100,6 +100,7 @@ services:
     restart: "no"
 
   # FINDU / BSG — autenticación (WebFlux, puerto 8081, contexto /security-auth)
+  # Imagen local por defecto. Publicar en Hub: DOCKERHUB.md → docviz-sesion1-back-security (build -f back-security-sesion1/Dockerfile).
   back-security:
     build:
       context: ./back-security-sesion1
@@ -145,8 +146,6 @@ services:
     build:
       context: ./backend-sesion1
       dockerfile: Dockerfile
-      args:
-        MAVEN_PROFILES: local
     image: sesion1-backend:latest
     container_name: docviz-backend
     # Opcional: si no existe el archivo, Compose no falla (Docker Compose v2.24+)
@@ -191,7 +190,7 @@ services:
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-sesion-bsg}
       FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-/run/secrets/firebase-adminsdk.json}
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/run/secrets/firebase-adminsdk.json}
-      # Perfil Gemini: SPRING_PROFILES_ACTIVE=develop (build JAR con -P"!local,develop")
+      # Gemini en la misma imagen: SPRING_PROFILES_ACTIVE=develop + GEMINI_API_KEY (ver application-develop.properties).
     depends_on:
       ollama:
         condition: service_started
@@ -211,12 +210,12 @@ services:
     build:
       context: ./frontend-sesion1
       dockerfile: Dockerfile
-      # Mismo origen que la SPA: /api → backend:8080/docviz, /security-api → back-security (evita CORS y "Failed to fetch").
-      args:
-        VITE_API_URL: /api
-        VITE_SECURITY_URL: /security-api
     image: sesion1-frontend:latest
     container_name: docviz-frontend
+    # Valores por defecto del build (Vite). En nube: BACKEND_URL / SECURITY_URL absolutos (ver frontend Dockerfile + docker/50-runtime-config.sh).
+    environment:
+      BACKEND_URL: ${FRONTEND_BACKEND_URL:-}
+      SECURITY_URL: ${FRONTEND_SECURITY_URL:-}
     ports:
       - "3000:80"
     depends_on:

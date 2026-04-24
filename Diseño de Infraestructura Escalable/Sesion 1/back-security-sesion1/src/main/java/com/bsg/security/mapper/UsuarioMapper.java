@@ -2,28 +2,40 @@ package com.bsg.security.mapper;
 
 import com.bsg.security.domain.model.Usuario;
 import com.bsg.security.infrastructure.entity.UserEntity;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.MappingConstants;
-import org.mapstruct.NullValuePropertyMappingStrategy;
+import org.springframework.stereotype.Component;
 
 /**
- * Mapeo entre modelo de dominio Usuario y entidad UserEntity (MapStruct).
- * Los campos de auditoría solo existen en la entidad; se ignoran al mapear dominio → entidad.
+ * Mapeo usuario ↔ {@link UserEntity}. Implementación manual: {@link Usuario} implementa {@link org.springframework.security.core.userdetails.UserDetails};
+ * MapStruct sobre ese tipo suele disparar APT en cascada (p. ej. colecciones / {@code ArrayList}) en Eclipse.
  */
-@Mapper(componentModel = MappingConstants.ComponentModel.SPRING,
-        nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
-public interface UsuarioMapper {
+@Component
+public class UsuarioMapper {
 
-    /** Rellenados fuera del mapper (joins / seguridad). Sin ignore, MapStruct APT puede fallar en cascada sobre tipos de colección. */
-    @Mapping(target = "rol", ignore = true)
-    @Mapping(target = "grantedAuthorities", ignore = true)
-    @Mapping(target = "authorities", ignore = true)
-    Usuario toDomain(UserEntity entity);
+    public Usuario toDomain(UserEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        Usuario usuario = new Usuario();
+        usuario.setId(entity.getId());
+        usuario.setUsername(entity.getUsername());
+        usuario.setEmail(entity.getEmail());
+        usuario.setPhone(entity.getPhone());
+        usuario.setPassword(entity.getPassword());
+        usuario.setActive(entity.isActive());
+        return usuario;
+    }
 
-    @Mapping(target = "createdAt", ignore = true)
-    @Mapping(target = "updatedAt", ignore = true)
-    @Mapping(target = "createdBy", ignore = true)
-    @Mapping(target = "updatedBy", ignore = true)
-    UserEntity toEntity(Usuario domain);
+    public UserEntity toEntity(Usuario domain) {
+        if (domain == null) {
+            return null;
+        }
+        UserEntity userEntity = new UserEntity();
+        userEntity.setId(domain.getId());
+        userEntity.setPhone(domain.getPhone());
+        userEntity.setUsername(domain.getUsername());
+        userEntity.setPassword(domain.getPassword());
+        userEntity.setEmail(domain.getEmail());
+        userEntity.setActive(domain.isActive());
+        return userEntity;
+    }
 }
