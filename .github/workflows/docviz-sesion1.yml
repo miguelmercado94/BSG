@@ -50,19 +50,30 @@ jobs:
           java-version: "21"
           cache: maven
 
-      - name: Run Maven Build
+      - name: Build Java projects
         run: |
-          # Buscamos el POM dinámicamente para evitar errores de ruta estática
+          set -euo pipefail
+
           if [ "${{ needs.changes.outputs.backend }}" == "true" ]; then
-            BACKEND_POM=$(find . -name "pom.xml" | grep "backend-sesion1" | head -n 1)
+            BACKEND_POM=$(find . -name "pom.xml" | grep "backend-sesion1" | head -n 1 || true)
+            if [ -z "$BACKEND_POM" ]; then
+              echo "Error: no se encontró pom.xml para backend-sesion1"
+              exit 1
+            fi
             echo "Construyendo backend en: $BACKEND_POM"
             mvn -f "$BACKEND_POM" clean compile -DskipTests
           fi
-          
+
           if [ "${{ needs.changes.outputs.security }}" == "true" ]; then
-            SECURITY_POM=$(find . -name "pom.xml" | grep "back-security-sesion1" | head -n 1)
-            echo "Construyendo seguridad en: $SECURITY_POM"
-            mvn -f "$SECURITY_POM" clean compile -DskipTests
+            SECURITY_DIR=$(find . -type d -name "back-security-sesion1" | head -n 1 || true)
+            if [ -z "$SECURITY_DIR" ]; then
+              echo "Error: no se encontró el directorio back-security-sesion1"
+              exit 1
+            fi
+            echo "Construyendo seguridad con Gradle en: $SECURITY_DIR"
+            chmod +x "$SECURITY_DIR/gradlew"
+            cd "$SECURITY_DIR"
+            ./gradlew clean build -x test --no-daemon
           fi
 
   build-and-push:
