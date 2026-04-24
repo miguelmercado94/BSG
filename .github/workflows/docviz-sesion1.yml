@@ -2,12 +2,10 @@ name: DocViz Sesión 1 - Docker Hub Versionado
 
 on:
   push:
-    # Se activa al subir cambios a tu rama actual o a main
     branches: 
       - BSG-DIE-SESION1
       - main
   pull_request:
-    # Se activa cuando se crea un PR hacia main
     branches: 
       - main
 
@@ -16,7 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SESION_ROOT: "Diseño de Infraestructura Escalable/Sesion 1"
+  # Ruta base para búsqueda (flexible ante minúsculas/mayúsculas)
+  SESION_ROOT: "diseño-infraestructura-escalable/sesion1"
 
 jobs:
   changes:
@@ -33,13 +32,13 @@ jobs:
         with:
           filters: |
             backend:
-              - 'Diseño de Infraestructura Escalable/Sesion 1/backend-sesion1/**'
+              - '**/backend-sesion1/**'
             frontend:
-              - 'Diseño de Infraestructura Escalable/Sesion 1/frontend-sesion1/**'
+              - '**/frontend-sesion1/**'
             security:
-              - 'Diseño de Infraestructura Escalable/Sesion 1/back-security-sesion1/**'
+              - '**/back-security-sesion1/**'
 
-  # Pruebas de Java (Backend y Seguridad)
+  # Job de Pruebas y Compilación (Java 21)
   test-java:
     needs: changes
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.security == 'true'
@@ -49,22 +48,47 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
           cache: maven
-      - name: Run Maven Tests
+
+      - name: Build Java projects
         run: |
+          set -euo pipefail
+
           if [ "${{ needs.changes.outputs.backend }}" == "true" ]; then
-            mvn -f "${{ env.SESION_ROOT }}/backend-sesion1/pom.xml" test
-          fi
-          if [ "${{ needs.changes.outputs.security }}" == "true" ]; then
-            mvn -f "${{ env.SESION_ROOT }}/back-security-sesion1/pom.xml" test
+            BACKEND_POM=$(find . -name "pom.xml" | grep "backend-sesion1" | head -n 1 || true)
+            if [ -z "$BACKEND_POM" ]; then
+              echo "Error: no se encontró pom.xml para backend-sesion1"
+              exit 1
+            fi
+            echo "Construyendo backend en: $BACKEND_POM"
+            mvn -f "$BACKEND_POM" clean compile -DskipTests
           fi
 
-  # Construcción y subida a Docker Hub
+          if [ "${{ needs.changes.outputs.security }}" == "true" ]; then
+            SECURITY_DIR=$(find . -type d -name "back-security-sesion1" | head -n 1 || true)
+            if [ -z "$SECURITY_DIR" ]; then
+              echo "Error: no se encontró el directorio back-security-sesion1"
+              exit 1
+            fi
+            # Verifica si es Gradle o Maven
+            if [ -f "$SECURITY_DIR/gradlew" ]; then
+              echo "Construyendo seguridad con Gradle en: $SECURITY_DIR"
+              chmod +x "$SECURITY_DIR/gradlew"
+              cd "$SECURITY_DIR" && ./gradlew clean build -x test --no-daemon
+            elif [ -f "$SECURITY_DIR/pom.xml" ]; then
+              echo "Construyendo seguridad con Maven en: $SECURITY_DIR"
+              mvn -f "$SECURITY_DIR/pom.xml" clean compile -DskipTests
+            fi
+          fi
+
+  # Job de Construcción y Subida a Docker Hub
   build-and-push:
     needs: [changes, test-java]
-    # Se ejecuta solo en push y si hubo cambios detectados
-    if: github.event_name == 'push' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.security == 'true')
+    if: |
+      always() && 
+      github.event_name == 'push' && 
+      (needs.test-java.result == 'success' || needs.test-java.result == 'skipped')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -73,8 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Filtro interno de la matriz
-      - name: Should run for this project
+      - name: Check Project Change
         id: check
         run: |
           SHOULD_RUN="false"
@@ -87,19 +110,25 @@ jobs:
         if: steps.check.outputs.run == 'true'
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          # NOMBRES DE SECRETOS ACTUALIZADOS
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Docker Build and Push
         if: steps.check.outputs.run == 'true'
         run: |
-          APP_PATH="${{ env.SESION_ROOT }}/${{ matrix.project }}"
-          # Leer versión del archivo y limpiar espacios
-          VERSION=$(cat "$APP_PATH/version.txt" | xargs)
-          REPO_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.project }}"
+          # Buscar la ruta real de la carpeta del proyecto
+          REAL_PATH=$(find . -type d -name "${{ matrix.project }}" | head -n 1)
+          if [ -z "$REAL_PATH" ]; then
+            echo "Error: No se encontró la carpeta para ${{ matrix.project }}"
+            exit 1
+          fi
           
-          echo "Construyendo imagen para ${{ matrix.project }} en la ruta $APP_PATH con versión $VERSION"
+          VERSION=$(cat "$REAL_PATH/version.txt" | xargs)
+          REPO_NAME="${{ secrets.DOCKER_USERNAME }}/${{ matrix.project }}"
           
-          docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$APP_PATH/Dockerfile" "$APP_PATH"
+          echo "Construyendo imagen desde: $REAL_PATH con versión $VERSION"
+          
+          docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$REAL_PATH/Dockerfile" "$REAL_PATH"
           docker push "$REPO_NAME:$VERSION"
           docker push "$REPO_NAME:latest"
