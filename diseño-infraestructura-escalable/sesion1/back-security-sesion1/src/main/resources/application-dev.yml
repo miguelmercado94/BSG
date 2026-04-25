@@ -1,6 +1,7 @@
 # Desarrollo local: PostgreSQL alineado con Sesion 1/docker-compose.yml → postgres-security (host 5433, BD bsg_security).
 # Sobrescribir con SPRING_R2DBC_* si usas otra instancia.
 # - Cada arranque: spring.sql.init en modo "always" + schema.sql (DROP) + data.sql.
+# - Pipeline CI/CD configurado hacia AWS ECS Fargate.
 # - Redis desactivado; autoconfig Redis excluida (sin conexión Lettuce).
 # - Logs DEBUG y trazas SQL R2DBC.
 
