@@ -1,5 +1,5 @@
 -- Datos iniciales (PostgreSQL). Ejecutar después de schema.sql.
--- module.path_base: security-auth | docviz (ruta dentro del contexto del micro en gateway).
+-- module.path_base security-auth | docviz (ruta dentro del contexto del micro en gateway).
 
 -- Módulos
 INSERT INTO module (name, path_base, active) VALUES ('AUTH', 'security-auth', TRUE);
@@ -56,11 +56,11 @@ INSERT INTO operation (path, name, http_method, module_id, permite_all, active) 
 INSERT INTO role (name, active) VALUES ('ROLE_ADMINISTRATOR', TRUE);
 INSERT INTO role (name, active) VALUES ('ROLE_SUPPORT', TRUE);
 
--- Administrador: todas las operaciones
+-- Administrador todas las operaciones
 INSERT INTO rol_operation (role_id, operation_id, active)
 SELECT 1, id, TRUE FROM operation;
 
--- Soporte: DocViz sin subir/borrar .md ni crear celda admin por API (rutas /admin/* siguen bloqueadas en el micro)
+-- Soporte DocViz sin subir/borrar .md ni crear celda admin por API (rutas /admin/* siguen bloqueadas en el micro)
 INSERT INTO rol_operation (role_id, operation_id, active)
 SELECT 2, id, TRUE FROM operation
 WHERE name NOT IN (
@@ -79,7 +79,7 @@ WHERE name NOT IN (
     'DOC_ADMIN_CELL_REPO_DELETE_IMPACT'
 );
 
--- Usuario demo administrador (contraseña: password — solo desarrollo)
+-- Usuario demo administrador (contrasena password — solo desarrollo)
 INSERT INTO "user" (phone, username, password, email, active) VALUES (
     NULL,
     'admin',
@@ -88,7 +88,7 @@ INSERT INTO "user" (phone, username, password, email, active) VALUES (
     TRUE
 );
 
--- Usuario demo soporte (misma contraseña: password)
+-- Usuario demo soporte (misma contrasena password)
 INSERT INTO "user" (phone, username, password, email, active) VALUES (
     NULL,
     'soporte',

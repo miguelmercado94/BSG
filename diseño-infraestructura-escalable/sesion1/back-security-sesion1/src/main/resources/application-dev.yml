@@ -39,6 +39,12 @@ bsg:
     redis:
       enabled: false
 
+cloud:
+  aws:
+    credentials:
+      access-key: test
+      secret-key: test
+
 management:
   health:
     redis:
