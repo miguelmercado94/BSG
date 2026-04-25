@@ -1,5 +1,7 @@
 package com.bsg.security.config;
 
+import java.net.URI;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,6 +30,7 @@ public class DynamoDbClientConfig {
                         AwsBasicCredentials.create("test", "test")));
                         
         if (properties.endpoint() != null && !properties.endpoint().isBlank()) {
+            builder.endpointOverride(URI.create(properties.endpoint().trim()));
         }
         return builder.build();
     }
