@@ -2,6 +2,7 @@
 # Sobrescribir con SPRING_R2DBC_* si usas otra instancia.
 # - Cada arranque: spring.sql.init en modo "always" + schema.sql (DROP) + data.sql.
 # - Pipeline CI/CD configurado hacia AWS ECS Fargate.
+# - Pequeño cambio para forzar el flujo del pipeline CI/CD.
 # - Redis desactivado; autoconfig Redis excluida (sin conexión Lettuce).
 # - Logs DEBUG y trazas SQL R2DBC.
 
