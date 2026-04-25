@@ -1,2 +1,6 @@
 # Firebase Admin SDK (no versionar)
 sesion-bsg-firebase-adminsdk*.json
+
+# AWS Access Keys (no versionar)
+*_accessKeys.csv
+admin-miguel_accessKeys.csv
