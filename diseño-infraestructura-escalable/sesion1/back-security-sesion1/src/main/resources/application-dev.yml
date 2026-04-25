@@ -13,12 +13,6 @@ spring:
       - org.springframework.boot.data.redis.autoconfigure.health.DataRedisHealthContributorAutoConfiguration
       - org.springframework.boot.data.redis.autoconfigure.health.DataRedisReactiveHealthContributorAutoConfiguration
 
-cloud:
-  aws:
-    credentials:
-      access-key: test
-      secret-key: test
-
   sql:
     init:
       mode: ${SPRING_SQL_INIT_MODE:always}
@@ -44,6 +38,12 @@ bsg:
         create-table-if-not-exists: ${BSG_SECURITY_AWS_DYNAMODB_CREATE_TABLE_IF_NOT_EXISTS:true}
     redis:
       enabled: false
+
+cloud:
+  aws:
+    credentials:
+      access-key: test
+      secret-key: test
 
 management:
   health:
