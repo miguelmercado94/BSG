@@ -125,6 +125,7 @@ jobs:
           fi
           
           VERSION=$(cat "$REAL_PATH/version.txt" | xargs)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           REPO_NAME="${{ secrets.DOCKER_USERNAME }}/${{ matrix.project }}"
           
           echo "Construyendo imagen desde: $REAL_PATH con versión $VERSION"
@@ -132,3 +133,42 @@ jobs:
           docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$REAL_PATH/Dockerfile" "$REAL_PATH"
           docker push "$REPO_NAME:$VERSION"
           docker push "$REPO_NAME:latest"
+
+      - name: Configure AWS credentials
+        if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Download current ECS task definition
+        if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
+        run: |
+          aws ecs describe-task-definition --task-definition bsg-back-security --query taskDefinition | jq -r 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' > task-definition.json
+
+      - name: Render Amazon ECS task definition
+        if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: back-security
+          image: ${{ secrets.DOCKER_USERNAME }}/back-security-sesion1:${{ env.VERSION }}
+
+      - name: Deploy to Amazon ECS
+        if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: bsg-back-security-service
+          cluster: bsg-cluster
+          wait-for-service-stability: true
