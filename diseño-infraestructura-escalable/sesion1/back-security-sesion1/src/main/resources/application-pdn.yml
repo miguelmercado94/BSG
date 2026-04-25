@@ -19,9 +19,7 @@ bsg:
 
 cloud:
   aws:
-    credentials:
-      access-key: "" # Anulamos cualquier credencial 'test' heredada
-      secret-key: "" # para obligar al SDK a usar el Rol de ECS Fargate
+    region: us-east-1 
 
 management:
   endpoint:
