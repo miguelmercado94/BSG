@@ -2,8 +2,6 @@
 # Activación: --spring.profiles.active=pdn
 
 spring:
-  config:
-    import: classpath:application-qa.yml
   sql:
     init:
       mode: never
@@ -15,6 +13,15 @@ bsg:
       enabled: true
     auth:
       reset-password-base-url: ${BSG_SECURITY_AUTH_RESET_PASSWORD_BASE_URL:https://app.example.invalid/reset-password}
+    aws:
+      dynamodb:
+        endpoint: "" # Forzamos a que use el endpoint real de AWS, no localstack
+
+cloud:
+  aws:
+    credentials:
+      access-key: "" # Anulamos cualquier credencial 'test' heredada
+      secret-key: "" # para obligar al SDK a usar el Rol de ECS Fargate
 
 management:
   endpoint:
