@@ -1,10 +1,15 @@
-# Producción: importa QA; sin SQL init en arranque; Redis obligatorio (revocación en caché).
+# Perfil de Producción (AWS ECS Fargate)
 # Activación: --spring.profiles.active=pdn
 
 spring:
   sql:
     init:
       mode: never
+
+cloud:
+  aws:
+    region:
+      static: us-east-1
 
 bsg:
   security:
@@ -16,11 +21,6 @@ bsg:
     aws:
       dynamodb:
         endpoint: "" # Forzamos a que use el endpoint real de AWS, no localstack
-
-cloud:
-  aws:
-    region:
-      static: us-east-1  # Es mejor usar .region.static
 
 management:
   endpoint:
