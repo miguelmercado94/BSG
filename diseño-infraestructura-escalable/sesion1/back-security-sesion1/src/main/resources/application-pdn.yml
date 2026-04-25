@@ -21,8 +21,6 @@ cloud:
   aws:
     region:
       static: us-east-1  # Es mejor usar .region.static
-    credentials:
-      instance-profile: true # Esto le dice al SDK que busque roles de IAM en ECS/EC2
 
 management:
   endpoint:
