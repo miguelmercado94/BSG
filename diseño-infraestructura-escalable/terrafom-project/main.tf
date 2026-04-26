@@ -425,3 +425,172 @@ resource "aws_apigatewayv2_route" "security_route" {
   route_key = "ANY /security-auth/{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.security_integration.id}"
 }
+
+# =========================================================
+# 15. IAM Roles & Security Group - DocViz Backend
+# =========================================================
+resource "aws_iam_role" "ecs_backend_task_role" {
+  name = "bsg-ecs-backend-task-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+# Permisos explícitos para que el backend maneje los 3 buckets de S3
+resource "aws_iam_role_policy" "s3_task_policy" {
+  name = "bsg-s3-task-policy"
+  role = aws_iam_role.ecs_backend_task_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket"]
+      Effect   = "Allow"
+      Resource = [
+        aws_s3_bucket.soporte_bucket.arn,
+        "${aws_s3_bucket.soporte_bucket.arn}/*",
+        aws_s3_bucket.borradores_bucket.arn,
+        "${aws_s3_bucket.borradores_bucket.arn}/*",
+        aws_s3_bucket.workarea_bucket.arn,
+        "${aws_s3_bucket.workarea_bucket.arn}/*"
+      ]
+    }]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "backend_logs" {
+  name              = "/ecs/bsg-backend"
+  retention_in_days = 7
+}
+
+resource "aws_security_group" "ecs_backend_sg" {
+  name   = "ecs-backend-sg"
+  vpc_id = data.aws_vpc.mi_vpc.id
+
+  ingress {
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group_rule" "rds_from_backend" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.rds_sg.id
+  source_security_group_id = aws_security_group.ecs_backend_sg.id
+}
+
+# =========================================================
+# 16. ECS Task & Service - DocViz Backend
+# =========================================================
+resource "aws_service_discovery_service" "backend_sd" {
+  name = "docviz" # Dominio: docviz.bsg.internal
+  dns_config {
+    namespace_id   = aws_service_discovery_private_dns_namespace.bsg_namespace.id
+    routing_policy = "MULTIVALUE"
+    dns_records {
+      ttl  = 60
+      type = "SRV"
+    }
+  }
+  health_check_custom_config {}
+}
+
+resource "aws_ecs_task_definition" "backend_task" {
+  family                   = "bsg-backend"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"  # 0.5 vCPU 
+  memory                   = "1024" # 1GB RAM 
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_backend_task_role.arn
+
+  container_definitions = jsonencode([{
+    name      = "backend"
+    image     = "mmercado94/backend-sesion1:3.0.0"
+    essential = true
+    portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
+    environment = [
+      { name = "SPRING_PROFILES_ACTIVE", value = "pdn" },
+      { name = "DATABASE_URL", value = "jdbc:postgresql://${aws_db_instance.postgres_bsg.endpoint}/docviz" },
+      { name = "DATABASE_USER", value = "bsg_admin" },
+      { name = "DATABASE_PASSWORD", value = "PasswordSeguro123" },
+      { name = "GEMINI_API_KEY", value = "AIzaSyDU3TtHQH9N-DGDeQlARuk1voQ_h77BQjQ" },
+      { name = "GEMINI_MODEL", value = "gemini-2.5-flash" },
+      { name = "FIREBASE_ENABLED", value = "true" },
+      { name = "FIREBASE_PROJECT_ID", value = "sesion-bsg" },
+      { name = "FIREBASE_CREDENTIALS_PATH", value = "sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
+      { name = "DOCVIZ_SUPPORT_ENABLED", value = "true" },
+      { name = "DOCVIZ_WORKSPACE_S3_ENABLED", value = "true" },
+      { name = "DOCVIZ_SUPPORT_S3_REGION", value = "us-east-1" },
+      { name = "DOCVIZ_SUPPORT_S3_BUCKET", value = aws_s3_bucket.soporte_bucket.bucket },
+      { name = "DOCVIZ_WORKSPACE_S3_BORRADOR_BUCKET", value = aws_s3_bucket.borradores_bucket.bucket },
+      { name = "DOCVIZ_WORKSPACE_S3_WORKAREA_BUCKET", value = aws_s3_bucket.workarea_bucket.bucket }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.backend_logs.name
+        "awslogs-region"        = "us-east-1"
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_service" "backend_service" {
+  name            = "bsg-backend-service"
+  cluster         = aws_ecs_cluster.bsg_cluster.id
+  task_definition = aws_ecs_task_definition.backend_task.arn
+  launch_type     = "FARGATE"
+  desired_count   = 1
+
+  network_configuration {
+    subnets          = data.aws_subnets.mis_subredes.ids
+    security_groups  = [aws_security_group.ecs_backend_sg.id]
+    assign_public_ip = true
+  }
+
+  service_registries {
+    registry_arn   = aws_service_discovery_service.backend_sd.arn
+    container_name = "backend"
+    container_port = 8080
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+}
+
+# =========================================================
+# 17. Integración de API Gateway con Backend DocViz
+# =========================================================
+resource "aws_apigatewayv2_integration" "backend_integration" {
+  api_id             = aws_apigatewayv2_api.bsg_gateway.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = aws_service_discovery_service.backend_sd.arn
+  integration_method = "ANY"
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.bsg_vpc_link.id
+}
+
+resource "aws_apigatewayv2_route" "backend_route" {
+  api_id    = aws_apigatewayv2_api.bsg_gateway.id
+  route_key = "ANY /docviz/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.backend_integration.id}"
+}
