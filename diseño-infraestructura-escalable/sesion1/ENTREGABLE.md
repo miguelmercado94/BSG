@@ -19,6 +19,7 @@ Quiero que implementes y dejes listo para producción en Railway un asistente RA
 === RUNTIME Y BACKEND (JAVA 21+) ===
 - Versión de Java: 21 como mínimo (LTS). No uses Java 17: el proyecto usa características propias de 21.
 - Spring Boot 3.3.x (o compatible), Spring Web, Spring Validation, Spring AI para chat y embeddings hacia Pinecone.
+- Spring Boot 3.3.x (o compatible), Spring Web, Spring Validation, Spring AI para chat y embeddings hacia pgvector.
 - Hilos virtuales de Java 21: en application.properties incluye `spring.threads.virtual.enabled=true` (si el entorno de despliegue falla, documentar fallback a `false`).
 - Extracción de texto de PDF en servidor: Apache PDFBox (u equivalente) para que los PDF dentro del repo pasen al pipeline de chunks.
 
@@ -40,10 +41,8 @@ Incluir al menos:
 - `spring.config.import=optional:file:./application-local.properties` si aplica overrides locales.
 - Prefijo de negocio `docviz.*`, por ejemplo:
   - `docviz.context-masters.base-path` (directorio base de repos clonados o contexto maestro).
-  - `docviz.vector.enabled`, `docviz.vector.pinecone-api-key=${PINECONE_API_KEY:}`, `docviz.vector.pinecone-index-name`, `docviz.vector.pinecone-index-host`, `docviz.vector.pinecone-inference-host`, `docviz.vector.pinecone-embed-model` (modelo de embeddings compatible con el índice), `docviz.vector.chunk-size`, `docviz.vector.chunk-overlap`, `docviz.vector.rag-top-k`, opciones de ingesta por lotes / hilos (`docviz.vector.prefetch-use-platform-threads=false` para preferir hilos virtuales en ingesta), etc.
-- Documentar que el índice Pinecone debe existir y que la dimensión del embedding coincida con `pinecone-embed-model`.
-
-Opcional local: cargar `.env` con springboot3-dotenv o equivalente para `PINECONE_API_KEY` sin commitear secretos.
+  - `docviz.vector.enabled`, `docviz.vector.chunk-size`, `docviz.vector.chunk-overlap`, `docviz.vector.rag-top-k`, opciones de ingesta por lotes / hilos (`docviz.vector.prefetch-use-platform-threads=false` para preferir hilos virtuales en ingesta), etc.
+  - Documentar que la base de datos PostgreSQL debe tener la extensión pgvector instalada.
 
 === API, SEGURIDAD LIGERA Y CORS ===
 - Implementar identificación de usuario/sesión vía cabecera HTTP `X-DocViz-User` en las rutas del API (filtro servlet); el frontend debe enviarla en todas las peticiones; healthcheck Docker puede usar la misma cabecera en GET a una ruta existente (p. ej. `/tags`).
@@ -52,7 +51,7 @@ Opcional local: cargar `.env` con springboot3-dotenv o equivalente para `PINECON
 === DOMINIO FUNCIONAL ===
 - No subida directa de PDF como flujo principal: el usuario trabaja sobre un repositorio Git (clone en servidor). Indexar texto de archivos del árbol; PDFs dentro del repo extraídos a texto y chunkados como el resto.
 - Endpoints REST: conexión/selección de repo, listado de etiquetas, lectura de contenido de archivo para vista previa, ingesta vectorial (idealmente con progreso por SSE o similar), chat RAG con fuentes opcionales.
-- Chat RAG: embedding de la pregunta → top-k Pinecone → prompt con contexto → respuesta (Gemini en nube u Ollama en local según perfiles).
+- Chat RAG: embedding de la pregunta → top-k en pgvector → prompt con contexto → respuesta (Gemini en nube u Ollama en local según perfiles).
 
 === FRONTEND ===
 - React + TypeScript + Vite. Bases del API: `VITE_API_URL` y `VITE_SECURITY_URL` en build, o `BACKEND_URL` y `SECURITY_URL` en el contenedor Nginx (script `docker-entrypoint.d` + `envsubst`). El cliente HTTP debe enviar `X-DocViz-User`.
@@ -67,7 +66,7 @@ Opcional local: cargar `.env` con springboot3-dotenv o equivalente para `PINECON
 
 === DESPLIEGUE RAILWAY ===
 - Dos servicios, mismo repositorio: Root Directory `backend-sesion1` y `frontend-sesion1`.
-- Backend: `SPRING_PROFILES_ACTIVE=develop`; `GEMINI_API_KEY`, `GEMINI_MODEL` (opcional); `PINECONE_API_KEY`; resto según `application.properties`. Sin build-args Maven en la imagen.
+- Backend: `SPRING_PROFILES_ACTIVE=develop`; `GEMINI_API_KEY`, `GEMINI_MODEL` (opcional); resto según `application.properties`. Sin build-args Maven en la imagen.
 - Frontend: variables `BACKEND_URL` y `SECURITY_URL` en el servicio (o build-args `VITE_*` equivalentes).
 - Orden: desplegar backend → copiar URLs HTTPS → configurar frontend.
 
@@ -99,4 +98,4 @@ de forma que el sistema actúe como **memoria de soluciones aprendidas**: al ate
 
 ---
 
-*Referencia del tutorial del curso: agentes de coding, Pinecone, despliegue en Railway ([Railway Agents](https://railway.com/agents)).*
+*Referencia del tutorial del curso: agentes de coding, pgvector, despliegue en Railway (Railway Agents).*

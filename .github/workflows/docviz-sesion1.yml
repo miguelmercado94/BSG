@@ -114,6 +114,14 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Inject Firebase Credentials (Backend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'backend-sesion1'
+        env:
+          FIREBASE_JSON: ${{ secrets.FIREBASE_CREDENTIALS }}
+        run: |
+          REAL_PATH=$(find . -type d -name "backend-sesion1" | head -n 1)
+          echo "$FIREBASE_JSON" > "$REAL_PATH/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json"
+
       - name: Docker Build and Push
         if: steps.check.outputs.run == 'true'
         run: |
