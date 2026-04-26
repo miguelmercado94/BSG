@@ -522,7 +522,7 @@ resource "aws_ecs_task_definition" "backend_task" {
 
   container_definitions = jsonencode([{
     name      = "backend"
-    image     = "mmercado94/backend-sesion1:3.0.0"
+    image     = "mmercado94/backend-sesion1:3.0.6"
     essential = true
     portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
     environment = [
@@ -535,6 +535,8 @@ resource "aws_ecs_task_definition" "backend_task" {
       { name = "FIREBASE_ENABLED", value = "true" },
       { name = "FIREBASE_PROJECT_ID", value = "sesion-bsg" },
       { name = "FIREBASE_CREDENTIALS_PATH", value = "sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
+      { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
+      { name = "DOCVIZ_EMBEDDINGS_PROVIDER", value = "spring-ai" },
       { name = "DOCVIZ_SUPPORT_ENABLED", value = "true" },
       { name = "DOCVIZ_WORKSPACE_S3_ENABLED", value = "true" },
       { name = "DOCVIZ_SUPPORT_S3_REGION", value = "us-east-1" },
@@ -570,10 +572,6 @@ resource "aws_ecs_service" "backend_service" {
     registry_arn   = aws_service_discovery_service.backend_sd.arn
     container_name = "backend"
     container_port = 8080
-  }
-
-  lifecycle {
-    ignore_changes = [task_definition]
   }
 }
 
