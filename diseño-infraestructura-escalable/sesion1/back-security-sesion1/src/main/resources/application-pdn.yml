@@ -1,12 +1,15 @@
-# Producción: importa QA; sin SQL init en arranque; Redis obligatorio (revocación en caché).
+# Perfil de Producción (AWS ECS Fargate)
 # Activación: --spring.profiles.active=pdn
 
 spring:
-  config:
-    import: classpath:application-qa.yml
   sql:
     init:
       mode: never
+
+cloud:
+  aws:
+    region:
+      static: us-east-1
 
 bsg:
   security:
@@ -15,6 +18,9 @@ bsg:
       enabled: true
     auth:
       reset-password-base-url: ${BSG_SECURITY_AUTH_RESET_PASSWORD_BASE_URL:https://app.example.invalid/reset-password}
+    aws:
+      dynamodb:
+        endpoint: "" # Forzamos a que use el endpoint real de AWS, no localstack
 
 management:
   endpoint:
