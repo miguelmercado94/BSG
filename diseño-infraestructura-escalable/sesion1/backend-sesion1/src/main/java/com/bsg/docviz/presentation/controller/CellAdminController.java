@@ -19,6 +19,7 @@ import com.bsg.docviz.support.SupportMarkdownService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -162,6 +163,8 @@ public class CellAdminController {
                     }
                 };
         return ResponseEntity.status(HttpStatus.CREATED)
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .header("X-Accel-Buffering", "no")
                 .contentType(MediaType.parseMediaType("application/x-ndjson"))
                 .body(stream);
     }
@@ -223,6 +226,8 @@ public class CellAdminController {
             }
         };
         return ResponseEntity.status(HttpStatus.CREATED)
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .header("X-Accel-Buffering", "no")
                 .contentType(MediaType.parseMediaType("application/x-ndjson"))
                 .body(stream);
     }

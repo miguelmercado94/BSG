@@ -174,6 +174,10 @@ public class DomainTaskService {
             }
             g.setToken(dec);
         }
+        // Alinear con ingesta admin/célula: los chunks viven bajo repo.vectorNamespace + user_label __DOCVIZ_NS__.
+        if (repo.vectorNamespace() != null && !repo.vectorNamespace().isBlank()) {
+            g.setVectorNamespace(repo.vectorNamespace().trim());
+        }
         return g;
     }
 }

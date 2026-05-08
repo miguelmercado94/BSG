@@ -86,6 +86,21 @@ public class DocvizInfrastructureStartupLogger implements ApplicationRunner {
         } else {
             log.info("DocViz infra: embeddings-provider={}, no se valida Ollama HTTP", provider);
         }
+        if ("spring-ai".equalsIgnoreCase(provider)) {
+            String openAiKey =
+                    firstNonBlank(
+                            env.getProperty("spring.ai.openai.embedding.api-key"),
+                            System.getenv("OPENAI_API_KEY"));
+            if (openAiKey == null || openAiKey.isBlank()) {
+                log.error(
+                        "DocViz infra: falta OPENAI_API_KEY (o spring.ai.openai.embedding.api-key). "
+                                + "La ingesta devolverá 0 fragmentos y los errores irán a lastIngestSkipped.");
+            } else {
+                log.info(
+                        "DocViz infra: clave API de embeddings OpenAI definida (longitud={})",
+                        openAiKey.length());
+            }
+        }
         log.info("========== DocViz: fin comprobación infraestructura ==========");
     }
 

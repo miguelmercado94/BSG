@@ -24,10 +24,6 @@ public class DocvizAuthorizationFilter extends OncePerRequestFilter {
         }
 
         String path = request.getServletPath();
-        if (path != null && path.startsWith("/ws/")) {
-            filterChain.doFilter(request, response);
-            return;
-        }
 
         if (path != null && path.startsWith("/admin/") && !CurrentUser.isAdministrator()) {
             forbidden(response, "Se requiere rol administrador");

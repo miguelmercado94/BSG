@@ -641,6 +641,52 @@ public class WorkAreaS3ArtifactService {
 
     }
 
+
+
+    /**
+
+     * Sobreescribe un objeto en el bucket borradores (sin reindexar). Persistir texto ya resuelto desde la UI (p. ej.
+
+     * conflictos DocViz sin marcadores).
+
+     */
+
+    public void updateBorradorObjectContent(
+
+            String userId, String taskHuCode, String objectKey, String utf8Content) {
+
+        if (utf8Content == null || utf8Content.isBlank()) {
+
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El contenido no puede estar vacío");
+
+        }
+
+        String borB = borradorBucket();
+
+        ensureArtifactKeyOwned(userId, taskHuCode, borB, objectKey);
+
+        SupportS3Service s3 = supportS3.getIfAvailable();
+
+        if (s3 == null) {
+
+            throw new IllegalStateException("S3 no disponible");
+
+        }
+
+        String k = objectKey.trim();
+
+        s3.putObject(
+
+                borB,
+
+                k,
+
+                utf8Content.getBytes(StandardCharsets.UTF_8),
+
+                "text/plain; charset=utf-8");
+
+    }
+
 }
 
 

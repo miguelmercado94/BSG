@@ -9,13 +9,18 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Cloud Map (*.bsg.internal): sin esto Nginx resuelve el upstream al arrancar y puede fallar si el DNS aún no existe → el task nuevo
+    # no pasa healthcheck y ECS sigue sirviendo la imagen antigua. Resolver VPC + proxy_pass con variable fuerza resolución por petición.
+    # Docker Compose: NGINX_RESOLVER=127.0.0.11 | Fargate: 169.254.169.253 (DNS de Amazon en la VPC).
+    resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss;
 
-    # Misma semántica que vite.config.ts: VITE_API_URL=/api y VITE_SECURITY_URL=/security-api.
-    # El navegador llama al mismo origen (p. ej. localhost:3000); Nginx reenvía a los servicios Docker.
+    # DOCVIZ_UPSTREAM / SECURITY_UPSTREAM: docker-compose → http://backend:8080; ECS → http://docviz.bsg.internal:8080
     location /api/ {
-        proxy_pass http://backend:8080/docviz/;
+        set $docviz_upstream "${DOCVIZ_UPSTREAM}";
+        proxy_pass $docviz_upstream/docviz/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -30,7 +35,8 @@ server {
     }
 
     location /security-api/ {
-        proxy_pass http://back-security:8081/security-auth/;
+        set $security_upstream "${SECURITY_UPSTREAM}";
+        proxy_pass $security_upstream/security-auth/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -38,7 +44,6 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Evita que el navegador conserve un index.html antiguo que apunta a JS con menú ⋮ ya eliminado del código fuente.
     location = /index.html {
         add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
         expires -1;

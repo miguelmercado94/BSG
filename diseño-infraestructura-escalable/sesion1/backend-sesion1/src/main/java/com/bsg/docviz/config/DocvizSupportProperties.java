@@ -18,8 +18,9 @@ public class DocvizSupportProperties {
     private String s3PresignEndpoint = "";
     private String s3Region = "us-east-1";
     private String s3Bucket = "soporte";
-    private String accessKey = "test";
-    private String secretKey = "test";
+    /** Solo LocalStack / endpoint custom; en AWS real van vacías y se usa IAM (DefaultCredentialsProvider). */
+    private String accessKey = "";
+    private String secretKey = "";
     /** Tamaño máximo del archivo subido (bytes). */
     private long maxUploadBytes = 2_000_000L;
 

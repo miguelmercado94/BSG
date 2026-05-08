@@ -102,13 +102,8 @@ export function WorkAreaPanel({
   /** Incluye borradores virtuales (solo JSON) sin `draftRelativePath`; excluye filas solo-S3 del GET /s3-artifacts. */
   const pendingDrafts = proposals.filter((p) => !p.acceptedRelativePath && !p.artifactViewOnly);
 
-  /** Con al menos un objeto listado desde S3 (borradores/workarea), se ocultan los párrafos largos para ganar espacio al listado. */
-  const hideIntroHints = proposals.some((p) => {
-    const b = p.s3Bucket?.trim();
-    if (!p.artifactViewOnly || !b) return false;
-    const bl = b.toLowerCase();
-    return bl.includes("borrador") || bl.includes("workarea");
-  });
+  /** Si hay cualquier archivo en el área de trabajo, se ocultan los párrafos largos para ganar espacio al listado. */
+  const hideIntroHints = proposals.length > 0;
 
   const downloadProposal = useCallback(
     async (p: WorkAreaFileProposal) => {

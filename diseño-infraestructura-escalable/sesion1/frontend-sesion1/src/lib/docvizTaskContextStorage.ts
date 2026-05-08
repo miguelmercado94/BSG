@@ -7,6 +7,8 @@ export type StoredTaskContext = {
   enunciado: string;
   cellLabel?: string;
   returnPath: string;
+  /** True si se entró con «Continuar en workspace» (no primer arranque de tarea nueva). */
+  resumeWorkspaceChat?: boolean;
 };
 
 type StoredPayload = {

@@ -1,10 +1,14 @@
 package com.bsg.docviz.presentation.controller;
 
 import com.bsg.docviz.dto.ChatHistoryEntryDto;
+import com.bsg.docviz.dto.RagChatTurnHttpRequest;
+import com.bsg.docviz.dto.RagChatTurnResponse;
 import com.bsg.docviz.dto.VectorChatRequest;
 import com.bsg.docviz.dto.VectorChatResponse;
+import com.bsg.docviz.dto.RagChatClientMessage;
 import com.bsg.docviz.security.CurrentUser;
 import com.bsg.docviz.service.ChatConversationPersistenceService;
+import com.bsg.docviz.service.RagChatTurnService;
 import com.bsg.docviz.vector.VectorRagService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -21,12 +25,15 @@ public class VectorChatController {
 
     private final VectorRagService vectorRagService;
     private final ChatConversationPersistenceService chatConversationPersistence;
+    private final RagChatTurnService ragChatTurnService;
 
     public VectorChatController(
             VectorRagService vectorRagService,
-            ChatConversationPersistenceService chatConversationPersistence) {
+            ChatConversationPersistenceService chatConversationPersistence,
+            RagChatTurnService ragChatTurnService) {
         this.vectorRagService = vectorRagService;
         this.chatConversationPersistence = chatConversationPersistence;
+        this.ragChatTurnService = ragChatTurnService;
     }
 
     /**
@@ -35,6 +42,36 @@ public class VectorChatController {
     @PostMapping("/vector/chat")
     public ResponseEntity<VectorChatResponse> chat(@Valid @RequestBody VectorChatRequest body) {
         return ResponseEntity.ok(vectorRagService.ask(body.getQuestion()));
+    }
+
+    /** Chat RAG por REST: una respuesta JSON con la respuesta completa (chunks simulados en el cliente). */
+    @PostMapping("/vector/chat/rag-turn")
+    public ResponseEntity<RagChatTurnResponse> ragTurn(@Valid @RequestBody RagChatTurnHttpRequest body) {
+        RagChatClientMessage in = new RagChatClientMessage();
+        in.setQuestion(body.getQuestion());
+        in.setUser(CurrentUser.require());
+        CurrentUser.role().ifPresent(in::setRole);
+        if (body.getTaskHuCode() != null && !body.getTaskHuCode().isBlank()) {
+            in.setTaskHuCode(body.getTaskHuCode().trim());
+        }
+        if (body.getTaskId() != null) {
+            in.setTaskIdFlexible(body.getTaskId());
+        }
+        if (body.getConversationId() != null && !body.getConversationId().isBlank()) {
+            in.setConversationId(body.getConversationId().trim());
+        }
+        if (body.getCellName() != null && !body.getCellName().isBlank()) {
+            in.setCellName(body.getCellName().trim());
+        }
+
+        RagChatTurnService.CollectingSink sink = new RagChatTurnService.CollectingSink();
+        ragChatTurnService.executeTurn(in, sink);
+
+        RagChatTurnResponse out = new RagChatTurnResponse();
+        out.setAnswer(sink.getAnswer());
+        out.setSources(sink.getSources());
+        out.setProposals(sink.getProposals());
+        return ResponseEntity.ok(out);
     }
 
     /**

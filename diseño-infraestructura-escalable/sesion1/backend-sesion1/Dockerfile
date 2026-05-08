@@ -18,7 +18,7 @@ COPY sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json /app/
 EXPOSE 8080
 
 # El filtro DocViz exige X-DocViz-User en todas las rutas
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+HEALTHCHECK --interval=35s --timeout=12s --start-period=120s --retries=5 \
   CMD wget -qO- --header="X-DocViz-User: healthcheck" http://127.0.0.1:8080/docviz/tags >/dev/null || exit 1
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

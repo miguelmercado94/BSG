@@ -11,18 +11,26 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 /**
- * Embeddings por defecto: Spring AI + Ollama ({@link EmbeddingModel}). Almacén pgvector no usa Pinecone.
- * Solo si {@code docviz.vector.embeddings-provider=pinecone-inference} se usa la API HTTP de inferencia Pinecone
- * (requiere {@code PINECONE_API_KEY}).
+ * Embeddings vía Spring AI {@link EmbeddingModel}. La dependencia explícita en {@link EmbeddingModel}
+ * fuerza el orden correcto respecto a la auto-config (OpenAI/Ollama); no usar
+ * {@code @ConditionalOnBean(EmbeddingModel)} en el método (se evalúa antes que exista el bean).
  */
 @Configuration
 public class EmbeddingClientConfiguration {
 
-    /** Evita {@code @ConditionalOnBean(EmbeddingModel)}: se evalúa antes que la auto-config de Ollama. */
     @Bean
     @Primary
+    @ConditionalOnMissingBean(EmbeddingClient.class)
     @ConditionalOnProperty(prefix = "docviz.vector", name = "embeddings-provider", havingValue = "spring-ollama", matchIfMissing = true)
-    public EmbeddingClient springAiEmbeddingClient(EmbeddingModel embeddingModel) {
+    public EmbeddingClient springAiEmbeddingClientOllama(EmbeddingModel embeddingModel) {
+        return new SpringAiEmbeddingClient(embeddingModel);
+    }
+
+    @Bean
+    @Primary
+    @ConditionalOnMissingBean(EmbeddingClient.class)
+    @ConditionalOnProperty(prefix = "docviz.vector", name = "embeddings-provider", havingValue = "spring-ai")
+    public EmbeddingClient springAiEmbeddingClientOpenAi(EmbeddingModel embeddingModel) {
         return new SpringAiEmbeddingClient(embeddingModel);
     }
 

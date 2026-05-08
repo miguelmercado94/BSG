@@ -329,6 +329,14 @@ public class VectorIngestService {
             }
         }
         int totalIndexable = indexable.size();
+        if (totalIndexable == 0 && pathsFromGit > 0) {
+            log.warn(
+                    "Vector ingest: 0 archivos indexables de {} rutas tras filtros (revisión {}). "
+                            + "¿Solo binarios/config? ¿Rutas bajo carpeta sin Git? Primeros omitidos (tipo): {}",
+                    pathsFromGit,
+                    rev,
+                    skipped.stream().limit(12).toList());
+        }
         log.info(
                 "Vector ingest start: user={}, namespace={}, indexableFiles={}, revision={}",
                 userLabel,
@@ -354,19 +362,25 @@ public class VectorIngestService {
 
         // Hilos virtuales (Java 21+) evitados aquí: en JRE 17 o bytecode mezclado provoca
         // "newVirtualThreadPerTaskExecutor() is undefined". Cached pool es compatible y suficiente para prefetch.
+        // Pool acotado: CachedThreadPool crece sin techo y en Fargate (poca RAM/CPU) puede tumbar el REST junto a la ingesta.
+        int prefetchThreads = Math.min(PREFETCH_AHEAD + 2, 8);
         ExecutorService prefetchPool = props.isPrefetchUsePlatformThreads()
                 ? Executors.newFixedThreadPool(Math.min(PREFETCH_AHEAD, 4))
-                : Executors.newCachedThreadPool(r -> {
-                    Thread t = new Thread(r, "docviz-prefetch");
-                    t.setDaemon(true);
-                    return t;
-                });
+                : Executors.newFixedThreadPool(
+                        prefetchThreads,
+                        r -> {
+                            Thread t = new Thread(r, "docviz-prefetch");
+                            t.setDaemon(true);
+                            return t;
+                        });
         try {
             for (int i = 0; i < indexable.size(); i++) {
                 String rel = indexable.get(i);
                 submitPrefetchAhead(indexable, i, root, rev, blobCache, prefetchPool, session.isEphemeralManagedClone());
                 if (onProgress != null) {
-                    onProgress.accept(IngestProgressDto.file(totalIndexable, files, chunks, rel));
+                    IngestProgressDto fileEv = IngestProgressDto.file(totalIndexable, files, chunks, rel);
+                    fileEv.setDetail("Leyendo desde Git…");
+                    onProgress.accept(fileEv);
                 }
                 try {
                     long size = gitRepositoryService.objectSizeBytes(root, rev, rel);
@@ -442,11 +456,15 @@ public class VectorIngestService {
         r.setSkipped(skipped);
         r.setNamespace(ns);
         log.info(
-                "Vector ingest done: namespace={}, filesProcessed={}, chunksIndexed={}, skippedLines={}",
+                "Vector ingest done: namespace={}, filesProcessed={}, chunksIndexed={}, skippedLines={}. "
+                        + "Verificar pgvector: SELECT COUNT(*) FROM docviz_vector_chunk WHERE namespace = '{}'; "
+                        + "RAG requiere misma sesión Git con vectorNamespace (user_label='{}').",
                 ns,
                 files,
                 chunks,
-                skipped.size());
+                skipped.size(),
+                ns,
+                userLabel);
         if (onProgress != null) {
             onProgress.accept(IngestProgressDto.done(r));
         }
@@ -596,7 +614,8 @@ public class VectorIngestService {
                 onProgress.accept(heartbeat);
             }
             log.info(
-                    "Ollama embeddings: {} textos, archivo {}, fragmentos {}..{} de {}",
+                    "Embeddings ({}): {} textos, archivo {}, fragmentos {}..{} de {}",
+                    embeddingClient.getClass().getSimpleName(),
                     slice.size(),
                     progressRel,
                     start + 1,
@@ -618,7 +637,11 @@ public class VectorIngestService {
                 throw e;
             }
             long embedMs = (System.nanoTime() - t0) / 1_000_000L;
-            log.info("Ollama embeddings listo en {} ms ({} vectores)", embedMs, embeddings.size());
+            log.info(
+                    "Embeddings listos en {} ms ({} vectores, cliente={})",
+                    embedMs,
+                    embeddings.size(),
+                    embeddingClient.getClass().getSimpleName());
             if (embeddings.size() != slice.size()) {
                 log.error(
                         "Conteo de embeddings incorrecto: esperados {} vectores, obtuve {} (archivo={})",
@@ -664,7 +687,7 @@ public class VectorIngestService {
                                 + totalParts
                                 + " ("
                                 + embedMs
-                                + " ms en llamada Ollama)");
+                                + " ms)");
                 onProgress.accept(afterBatch);
             }
         }
@@ -721,27 +744,32 @@ public class VectorIngestService {
     }
 
     /**
-     * Extensiones y nombres de archivo que se intentan indexar. Si un repo usa solo lenguajes no listados,
-     * todo queda en "tipo no indexable" y la ingesta termina en 0 archivos.
+     * Rutas indexables en repos Git: código, texto y documentación legible.
+     * Incluye Markdown ({@code .md}, {@code .mdx}, {@code .markdown}) y PDF (texto extraído con PDFBox).
+     * Quedan fuera Office (.doc/.docx), imágenes, jars, bytecode, etc.
      */
     private static boolean isIndexablePath(String rel) {
         if (rel == null || rel.isBlank()) {
             return false;
         }
+        rel = rel.trim().replace('\\', '/');
         String lower = rel.toLowerCase(Locale.ROOT);
         int slash = Math.max(lower.lastIndexOf('/'), lower.lastIndexOf('\\'));
-        String base = slash >= 0 ? lower.substring(slash + 1) : lower;
+        String base = (slash >= 0 ? lower.substring(slash + 1) : lower).strip();
         if (base.equals("dockerfile")
                 || base.equals("makefile")
                 || base.equals("jenkinsfile")
                 || base.equals("rakefile")
                 || base.equals("gemfile")
                 || base.equals(".gitignore")
+                || base.equals(".gitattributes")
                 || base.equals(".dockerignore")
                 || base.equals("readme")) {
             return true;
         }
-        return lower.endsWith(".java")
+        return lower.endsWith(".gitattributes")
+                || lower.endsWith(".gitmodules")
+                || lower.endsWith(".java")
                 || lower.endsWith(".kt")
                 || lower.endsWith(".kts")
                 || lower.endsWith(".xml")
@@ -752,10 +780,23 @@ public class VectorIngestService {
                 || lower.endsWith(".jsonc")
                 || lower.endsWith(".md")
                 || lower.endsWith(".mdx")
+                || lower.endsWith(".markdown")
+                || lower.endsWith(".pdf")
                 || lower.endsWith(".txt")
                 || lower.endsWith(".sql")
+                || lower.endsWith(".ddl")
+                || lower.endsWith(".hql")
+                || lower.endsWith(".cql")
+                || lower.endsWith(".kql")
+                || lower.endsWith(".pgsql")
+                || lower.endsWith(".psql")
+                || lower.endsWith(".mysql")
+                || lower.endsWith(".prc")
+                || lower.endsWith(".fnc")
+                || lower.endsWith(".pks")
+                || lower.endsWith(".tab")
+                || lower.endsWith(".vw")
                 || lower.endsWith(".gradle")
-                || lower.endsWith(".pdf")
                 || lower.endsWith(".ts")
                 || lower.endsWith(".tsx")
                 || lower.endsWith(".mts")
@@ -780,6 +821,9 @@ public class VectorIngestService {
                 || lower.endsWith(".scala")
                 || lower.endsWith(".clj")
                 || lower.endsWith(".cljs")
+                || lower.endsWith(".jsp")
+                || lower.endsWith(".jspf")
+                || lower.endsWith(".tag")
                 // Go, Rust, Zig, etc.
                 || lower.endsWith(".go")
                 || lower.endsWith(".mod")
@@ -798,6 +842,11 @@ public class VectorIngestService {
                 || lower.endsWith(".py")
                 || lower.endsWith(".pyi")
                 || lower.endsWith(".pyw")
+                || lower.endsWith(".pyx")
+                || lower.endsWith(".pxd")
+                || lower.endsWith(".ipynb")
+                || lower.endsWith(".jinja")
+                || lower.endsWith(".j2")
                 || lower.endsWith(".rb")
                 || lower.endsWith(".erb")
                 || lower.endsWith(".php")
@@ -826,6 +875,10 @@ public class VectorIngestService {
                 || lower.endsWith(".graphql")
                 || lower.endsWith(".gql")
                 || lower.endsWith(".proto")
+                || lower.endsWith(".rst")
+                || lower.endsWith(".adoc")
+                || lower.endsWith(".asciidoc")
+                || lower.endsWith(".edn")
                 // Otros lenguajes frecuentes en monorepos
                 || lower.endsWith(".dart")
                 || lower.endsWith(".elm")
@@ -838,6 +891,7 @@ public class VectorIngestService {
                 || lower.endsWith(".pm")
                 || lower.endsWith(".r")
                 || lower.endsWith(".nim")
+                || lower.endsWith(".jl")
                 || lower.endsWith(".v")
                 || lower.endsWith(".sol")
                 || lower.endsWith(".tf")

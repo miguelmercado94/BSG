@@ -10,8 +10,6 @@ import { defineConfig } from "vitest/config";
 const longRunningApiProxy: ProxyOptions = {
   target: "http://127.0.0.1:8080",
   changeOrigin: true,
-  /** Sin esto, el handshake WS a /api/ws/* no se reenvía y el chat RAG muestra «Error de red (WebSocket)». */
-  ws: true,
   rewrite: (p: string) => {
     const rest = p.replace(/^\/api/, "");
     return "/docviz" + (rest.startsWith("/") ? rest : `/${rest}`);

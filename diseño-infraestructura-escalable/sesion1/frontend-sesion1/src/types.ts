@@ -156,6 +156,13 @@ export interface WorkAreaProposalPayload {
   proposals: WorkAreaFileProposal[];
 }
 
+/** Respuesta de POST /vector/chat/rag-turn. */
+export interface RagChatTurnResponse {
+  answer: string;
+  sources: string[];
+  proposals?: WorkAreaFileProposal[];
+}
+
 export interface TagsResponse {
   tags: string[];
 }

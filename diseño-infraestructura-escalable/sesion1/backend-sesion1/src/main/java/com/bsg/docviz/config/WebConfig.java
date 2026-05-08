@@ -29,11 +29,17 @@ public class WebConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**")
+                        .allowedOrigins(
+                                // Explícito por si el matcheo por patrón falla en proxies OPTIONS.
+                                "http://bsg-frontend-alb-1943066260.us-east-1.elb.amazonaws.com",
+                                "https://bsg-frontend-alb-1943066260.us-east-1.elb.amazonaws.com")
                         .allowedOriginPatterns(
                                 "http://localhost:*",
                                 "http://127.0.0.1:*",
+                                "http://*.us-east-1.elb.amazonaws.com",
+                                "https://*.us-east-1.elb.amazonaws.com",
                                 "https://*.up.railway.app")
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                         .allowedHeaders("*")
                         .exposedHeaders("X-DocViz-Resolved-Conversation-Id")
                         .allowCredentials(true);

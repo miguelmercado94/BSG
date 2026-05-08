@@ -30,8 +30,17 @@ function buildTaskContext(
   huCode: string,
   enunciado: string,
   chatConversationId: string | null | undefined,
+  resumeWorkspaceChat: boolean,
 ) {
-  return { taskId, chatConversationId: chatConversationId ?? undefined, huCode, enunciado, cellLabel, returnPath };
+  return {
+    taskId,
+    chatConversationId: chatConversationId ?? undefined,
+    huCode,
+    enunciado,
+    cellLabel,
+    returnPath,
+    resumeWorkspaceChat,
+  };
 }
 
 export function SupportCellTasksPage() {
@@ -120,6 +129,8 @@ export function SupportCellTasksPage() {
   async function runConnectAndWorkspace(
     cont: Awaited<ReturnType<typeof continueTask>>,
     taskCtx: ReturnType<typeof buildTaskContext>,
+    /** Solo en tarea nueva: primer mensaje automático al modelo. Al continuar una tarea no se reenvía el prompt. */
+    includeInitialChatPrompt: boolean,
   ) {
     const ns = cont.vectorNamespaceHint?.trim();
     const connectBody = {
@@ -128,31 +139,33 @@ export function SupportCellTasksPage() {
     };
     const res = await connectGit(connectBody);
     saveGitConnectRequest(connectBody);
+    const navState: Record<string, unknown> = {
+      connect: res,
+      taskCellRepoId: cont.cellRepoId,
+      taskContext: taskCtx,
+    };
+    if (includeInitialChatPrompt && cont.initialChatPrompt?.trim()) {
+      navState.initialChatPrompt = cont.initialChatPrompt;
+    }
     if (!ns) {
       const r = await vectorIngestStream(applyIngestEvent);
       navigate("/app", {
         state: {
-          connect: res,
+          ...navState,
           initialIngest: r,
-          initialChatPrompt: cont.initialChatPrompt,
-          taskCellRepoId: cont.cellRepoId,
-          taskContext: taskCtx,
         },
       });
       return;
     }
     navigate("/app", {
       state: {
-        connect: res,
+        ...navState,
         initialIngest: {
           filesProcessed: 0,
           chunksIndexed: 0,
           namespace: ns,
           skipped: [],
         },
-        initialChatPrompt: cont.initialChatPrompt,
-        taskCellRepoId: cont.cellRepoId,
-        taskContext: taskCtx,
       },
     });
   }
@@ -199,7 +212,9 @@ export function SupportCellTasksPage() {
           hu,
           en,
           cont.chatConversationId ?? created.chatConversationId,
+          false,
         ),
+        true,
       );
     } catch (err) {
       setIngestErr(err instanceof Error ? err.message : String(err));
@@ -234,7 +249,9 @@ export function SupportCellTasksPage() {
           task.huCode,
           task.enunciado,
           cont.chatConversationId ?? task.chatConversationId,
+          true,
         ),
+        false,
       );
     } catch (err) {
       setIngestErr(err instanceof Error ? err.message : String(err));

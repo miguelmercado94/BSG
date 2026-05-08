@@ -8,6 +8,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   SUPPORT_UPLOAD_API_UNAVAILABLE,
   connectGit,
+  continueTask,
   deleteSupportMarkdown,
   fetchChatHistory,
   fetchFileContent,
@@ -29,6 +30,7 @@ import {
   indexWorkAreaFileFromPath,
   fetchWorkAreaS3ArtifactBody,
   fetchWorkAreaS3Artifacts,
+  saveWorkAreaS3BorradorContent,
   saveWorkAreaS3WorkareaAndReindex,
   restoreWorkAreaFromS3,
   streamVectorChat,
@@ -64,6 +66,7 @@ import { workAreaProposalFallbackPayloadText } from "../lib/workAreaProposalRaw"
 import { getDocvizFileMentionFromDataTransfer } from "../lib/docvizDrag";
 import { resolveChatConversationId } from "../lib/chatConversationId";
 import { mergeFirestoreHistoryWithLocalStream } from "../lib/chatHistoryMerge";
+import { splitRagChatQuestion } from "../lib/ragChatDisplay";
 import { formatChatAnswerForDisplay } from "../lib/workAreaDisplay";
 import { buildResolvedDocvizMerge, hasDocvizMergeMarkers } from "../lib/docvizConflictMarkers";
 import { hasGitConflictMarkers } from "../lib/parseGitConflictMarkers";
@@ -192,12 +195,24 @@ function mapUnifiedS3ArtifactsToProposals(items: WorkAreaS3ObjectDto[]): WorkAre
 
 /**
  * La columna «Archivos nuevos» solo debe listar entradas con objeto real en S3 (presign) o restauradas desde S3;
- * no propuestas solo en memoria enviadas por el WebSocket del chat.
+ * no propuestas solo en memoria devueltas por el último turno del chat (sin objeto en S3).
  */
 function isWorkareaS3Artifact(p: WorkAreaFileProposal): boolean {
   return Boolean(
     p.artifactViewOnly && p.s3Bucket && /workarea/i.test(p.s3Bucket) && p.s3ObjectKey?.trim(),
   );
+}
+
+/** Borrador versionado solo en bucket borradores (lista GET /s3-artifacts). */
+function isS3BorradorArtifact(p: WorkAreaFileProposal): boolean {
+  return Boolean(
+    p.artifactViewOnly && p.s3Bucket && /borrador/i.test(p.s3Bucket) && p.s3ObjectKey?.trim(),
+  );
+}
+
+/** Vista solo-S3 editable (texto UTF-8 en borradores o workarea). */
+function isEditableS3Artifact(p: WorkAreaFileProposal): boolean {
+  return isWorkareaS3Artifact(p) || isS3BorradorArtifact(p);
 }
 
 function workAreaProposalVisibleInWorkAreaPanel(p: WorkAreaFileProposal): boolean {
@@ -256,6 +271,8 @@ type LocationState = {
     enunciado: string;
     cellLabel?: string;
     returnPath: string;
+    /** Entrada con «Continuar en workspace»: no reenviar el primer prompt salvo historial vacío. */
+    resumeWorkspaceChat?: boolean;
   };
 };
 
@@ -343,7 +360,6 @@ export function WorkspacePage() {
 
   const taskCellRepoId = state?.taskCellRepoId;
   const initialChatPromptFromTask = state?.initialChatPrompt;
-  const hasTaskInitialPrompt = Boolean(initialChatPromptFromTask);
   const taskContextFromRoute = state?.taskContext;
 
   /** Si entras a /app sin state (p. ej. nuevo login), recupera HU/tarea para historial Firestore y cabeceras S3. */
@@ -367,6 +383,8 @@ export function WorkspacePage() {
   }, [taskContextFromRoute, connect?.usuario]);
 
   const taskContext = taskContextFromRoute ?? taskContextFromStorage ?? undefined;
+
+  const resumeWorkspaceChat = taskContext?.resumeWorkspaceChat === true;
 
   /**
    * Cabeceras REST para S3 borrador/workarea (HU + célula).
@@ -467,15 +485,18 @@ export function WorkspacePage() {
   const [workAreaNotice, setWorkAreaNotice] = useState<string | null>(null);
   const [workAreaKeepLoadingId, setWorkAreaKeepLoadingId] = useState<string | null>(null);
   const [workAreaErr, setWorkAreaErr] = useState<string | null>(null);
-  /** Si el WebSocket no trajo `content`, GET /vector/work-area/draft rellena la vista previa. */
+  /** Si la propuesta no incluyó `content`, GET /vector/work-area/draft rellena la vista previa. */
   const [workAreaPreviewLoadingId, setWorkAreaPreviewLoadingId] = useState<string | null>(null);
   const workAreaDraftFetchKeysRef = useRef<Set<string>>(new Set());
   const workAreaConflictViewerRef = useRef<ConflictInlineCodeViewerHandle>(null);
   /** Texto ya resuelto para borradores con marcadores DocViz (sin `<<<<<<<`). */
   const [workAreaResolvedDraft, setWorkAreaResolvedDraft] = useState<string | null>(null);
-  /** Edición in-place de objetos ya en bucket workarea (S3 + reindexación). */
+  /** Edición in-place de objetos ya en bucket workarea o borradores (S3). */
   const [workAreaS3Editing, setWorkAreaS3Editing] = useState(false);
   const [workAreaS3EditDraft, setWorkAreaS3EditDraft] = useState("");
+  /** Borrador .txt en el clon (no solo-S3): editor tras resolver conflictos o revisar texto antes de finalizar. */
+  const [workAreaCloneDraftEditing, setWorkAreaCloneDraftEditing] = useState(false);
+  const [workAreaCloneDraftBuffer, setWorkAreaCloneDraftBuffer] = useState("");
   const onWorkAreaDocvizResolved = useCallback((s: string) => {
     setWorkAreaResolvedDraft(s);
   }, []);
@@ -597,6 +618,8 @@ export function WorkspacePage() {
   useEffect(() => {
     setWorkAreaS3Editing(false);
     setWorkAreaS3EditDraft("");
+    setWorkAreaCloneDraftEditing(false);
+    setWorkAreaCloneDraftBuffer("");
   }, [workAreaSelectedId]);
 
   useEffect(() => {
@@ -624,6 +647,21 @@ export function WorkspacePage() {
     }
   }
 
+  const startWorkAreaCloneDraftEdit = useCallback(() => {
+    const p = workAreaProposals.find((x) => x.id === workAreaSelectedId);
+    if (!p?.draftRelativePath || p.artifactViewOnly) return;
+    let t = p.content ?? "";
+    if (hasDocvizMergeMarkers(t)) {
+      t = workAreaResolvedDraft ?? buildResolvedDocvizMerge(t, "theirs");
+    }
+    setWorkAreaCloneDraftBuffer(t);
+    setWorkAreaCloneDraftEditing(true);
+  }, [workAreaProposals, workAreaResolvedDraft, workAreaSelectedId]);
+
+  const cancelWorkAreaCloneDraftEdit = useCallback(() => {
+    setWorkAreaCloneDraftEditing(false);
+  }, []);
+
   /** Guarda el texto mostrado/resuelto en la vista (no solo el .txt en disco) y lo mueve a workarea en S3. */
   async function handleWorkAreaSaveFinalize(id: string) {
     const p = workAreaProposals.find((x) => x.id === id);
@@ -632,7 +670,9 @@ export function WorkspacePage() {
     setWorkAreaKeepLoadingId(id);
     try {
       let text: string;
-      if (hasDocvizMergeMarkers(p.content)) {
+      if (workAreaCloneDraftEditing && p.id === workAreaSelectedId) {
+        text = workAreaCloneDraftBuffer;
+      } else if (hasDocvizMergeMarkers(p.content)) {
         text = workAreaResolvedDraft ?? buildResolvedDocvizMerge(p.content, "theirs");
       } else if (hasGitConflictMarkers(p.content) && workAreaConflictViewerRef.current) {
         if (workAreaConflictViewerRef.current.hasPendingConflicts()) {
@@ -657,6 +697,7 @@ export function WorkspacePage() {
       setWorkAreaNotice(
         `Guardado en workarea: ${r.acceptedRelativePath} — revisa el clon; luego «Indexar borrador» si quieres RAG.`,
       );
+      setWorkAreaCloneDraftEditing(false);
     } catch (e) {
       setWorkAreaErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -809,6 +850,9 @@ export function WorkspacePage() {
       if (!text) {
         text = await fetchWorkAreaS3ArtifactBody(p.s3Bucket, p.s3ObjectKey, workAreaTaskHeaders);
       }
+      if (hasDocvizMergeMarkers(text)) {
+        text = workAreaResolvedDraft ?? buildResolvedDocvizMerge(text, "theirs");
+      }
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -822,14 +866,18 @@ export function WorkspacePage() {
     } catch (e) {
       setWorkAreaErr(e instanceof Error ? e.message : String(e));
     }
-  }, [workAreaProposals, workAreaSelectedId, workAreaTaskHeaders]);
+  }, [workAreaProposals, workAreaResolvedDraft, workAreaSelectedId, workAreaTaskHeaders]);
 
   const startWorkAreaS3Edit = useCallback(() => {
     const p = workAreaProposals.find((x) => x.id === workAreaSelectedId);
-    if (!p || !isWorkareaS3Artifact(p)) return;
-    setWorkAreaS3EditDraft(p.content ?? "");
+    if (!p || !isEditableS3Artifact(p)) return;
+    let draft = p.content ?? "";
+    if (hasDocvizMergeMarkers(draft)) {
+      draft = workAreaResolvedDraft ?? buildResolvedDocvizMerge(draft, "theirs");
+    }
+    setWorkAreaS3EditDraft(draft);
     setWorkAreaS3Editing(true);
-  }, [workAreaProposals, workAreaSelectedId]);
+  }, [workAreaProposals, workAreaResolvedDraft, workAreaSelectedId]);
 
   const cancelWorkAreaS3Edit = useCallback(() => {
     setWorkAreaS3Editing(false);
@@ -837,35 +885,61 @@ export function WorkspacePage() {
 
   const saveWorkAreaS3Edit = useCallback(async () => {
     const p = workAreaProposals.find((x) => x.id === workAreaSelectedId);
-    if (!p?.s3ObjectKey?.trim() || !p.s3Bucket?.trim() || !isWorkareaS3Artifact(p)) return;
+    if (!p?.s3ObjectKey?.trim() || !p.s3Bucket?.trim() || !isEditableS3Artifact(p)) return;
+    const finalText = workAreaS3EditDraft;
+    if (
+      hasDocvizMergeMarkers(finalText) ||
+      hasGitConflictMarkers(finalText)
+    ) {
+      setWorkAreaErr("Quita los marcadores de conflicto del texto antes de guardar.");
+      return;
+    }
     setWorkAreaErr(null);
     setWorkAreaKeepLoadingId(p.id);
     try {
-      const r = await saveWorkAreaS3WorkareaAndReindex(
-        { objectKey: p.s3ObjectKey, content: workAreaS3EditDraft },
-        workAreaTaskHeaders,
-      );
-      const uid = connect?.usuario?.trim() || getUserId()?.trim();
-      const stored = uid ? loadWorkspaceTaskContext(uid) : null;
-      const hu = taskContext?.huCode?.trim() || stored?.huCode?.trim();
-      const storagePath = `__s3_workarea__/${p.fileName}`;
-      if (uid && hu) {
-        saveWorkAreaIndexed(uid, hu, storagePath, r.chunksIndexed ?? 0);
+      if (isWorkareaS3Artifact(p)) {
+        const r = await saveWorkAreaS3WorkareaAndReindex(
+          { objectKey: p.s3ObjectKey, content: finalText },
+          workAreaTaskHeaders,
+        );
+        const uid = connect?.usuario?.trim() || getUserId()?.trim();
+        const stored = uid ? loadWorkspaceTaskContext(uid) : null;
+        const hu = taskContext?.huCode?.trim() || stored?.huCode?.trim();
+        const storagePath = `__s3_workarea__/${p.fileName}`;
+        if (uid && hu) {
+          saveWorkAreaIndexed(uid, hu, storagePath, r.chunksIndexed ?? 0);
+        }
+        setWorkAreaProposals((prev) =>
+          prev.map((x) =>
+            x.id === p.id
+              ? {
+                  ...x,
+                  content: finalText,
+                  vectorIndexed: true,
+                  lastIndexedChunks: r.chunksIndexed,
+                }
+              : x,
+          ),
+        );
+        setWorkAreaNotice(`Guardado en S3 y reindexado (${r.chunksIndexed ?? 0} fragmentos): ${p.fileName}`);
+      } else {
+        await saveWorkAreaS3BorradorContent(
+          { objectKey: p.s3ObjectKey, content: finalText },
+          workAreaTaskHeaders,
+        );
+        setWorkAreaProposals((prev) =>
+          prev.map((x) =>
+            x.id === p.id
+              ? {
+                  ...x,
+                  content: finalText,
+                }
+              : x,
+          ),
+        );
+        setWorkAreaNotice(`Borrador guardado en S3: ${p.fileName}`);
       }
-      setWorkAreaProposals((prev) =>
-        prev.map((x) =>
-          x.id === p.id
-            ? {
-                ...x,
-                content: workAreaS3EditDraft,
-                vectorIndexed: true,
-                lastIndexedChunks: r.chunksIndexed,
-              }
-            : x,
-        ),
-      );
       setWorkAreaS3Editing(false);
-      setWorkAreaNotice(`Guardado en S3 y reindexado (${r.chunksIndexed ?? 0} fragmentos): ${p.fileName}`);
     } catch (e) {
       setWorkAreaErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -935,6 +1009,9 @@ export function WorkspacePage() {
 
   const [chatHistoryErr, setChatHistoryErr] = useState<string | null>(null);
 
+  /** Evita el primer envío automático al modelo antes de saber si Firestore ya tiene turnos. */
+  const [chatHistoryHydrated, setChatHistoryHydrated] = useState(false);
+
   const [chatErr, setChatErr] = useState<string | null>(null);
 
   const [chatLoading, setChatLoading] = useState(false);
@@ -951,6 +1028,110 @@ export function WorkspacePage() {
       chatFormRef.current?.requestSubmit();
     },
     [ingestComplete, chatLoading, question],
+  );
+
+  /**
+   * Primer mensaje RAG automático (tarea nueva o reanudar con historial vacío).
+   * `sessionDedupeKey` evita doble envío en la misma pestaña; `isCancelled` limpia al desmontar o cambiar tarea.
+   */
+  const runAutoInitialChatStream = useCallback(
+    async (prompt: string, sessionDedupeKey: string, isCancelled: () => boolean) => {
+      let storageKey = sessionDedupeKey;
+      try {
+        if (sessionStorage.getItem(sessionDedupeKey)) return;
+        sessionStorage.setItem(sessionDedupeKey, "1");
+      } catch {
+        storageKey = "";
+      }
+      if (isCancelled()) return;
+      setChatErr(null);
+      setChatLoading(true);
+      const streamId = `stream-task-${Date.now()}`;
+      setChatTurns((prev) => [
+        ...prev,
+        {
+          id: streamId,
+          question: prompt,
+          answer: "",
+          sources: [],
+          repoLabel: "",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      try {
+        let convForChat = baseChatConversationId;
+        if (taskContext?.taskId != null && taskContext?.huCode?.trim()) {
+          const r = await fetchChatHistory(50, {
+            taskId: taskContext.taskId,
+            huCode: taskContext.huCode,
+            ...(taskContext.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
+          });
+          if (isCancelled()) return;
+          if (r.resolvedConversationId) {
+            setResolvedPrimaryChatId(r.resolvedConversationId);
+            convForChat = r.resolvedConversationId;
+          }
+        }
+        await streamVectorChat(
+          prompt,
+          {
+            onStart: (sources) => {
+              setChatTurns((prev) => prev.map((t) => (t.id === streamId ? { ...t, sources } : t)));
+            },
+            onDelta: (text) => {
+              setChatTurns((prev) =>
+                prev.map((t) => (t.id === streamId ? { ...t, answer: t.answer + text } : t)),
+              );
+            },
+            onProposals: onWorkAreaChatProposals,
+          },
+          {
+            taskHuCode: taskContext?.huCode,
+            ...(taskContext?.taskId != null ? { taskId: taskContext.taskId } : {}),
+            ...(convForChat ? { conversationId: convForChat } : {}),
+            ...(taskContext?.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
+          },
+        );
+        if (isCancelled()) return;
+        try {
+          const { entries: rows } =
+            taskContext?.taskId != null && taskContext?.huCode?.trim()
+              ? await fetchChatHistory(50, {
+                  taskId: taskContext.taskId,
+                  huCode: taskContext.huCode,
+                  ...(taskContext.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
+                })
+              : await fetchChatHistory(50, { conversationId: convForChat });
+          setChatHistoryErr(null);
+          setChatTurns((prev) => {
+            const local = prev.find((t) => t.id === streamId);
+            return mergeFirestoreHistoryWithLocalStream(rows, local, prompt);
+          });
+        } catch {
+          /* igual que onChat */
+        }
+      } catch (e) {
+        if (!isCancelled()) {
+          setChatErr(e instanceof Error ? e.message : String(e));
+          if (storageKey) {
+            try {
+              sessionStorage.removeItem(storageKey);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      } finally {
+        if (!isCancelled()) setChatLoading(false);
+      }
+    },
+    [
+      baseChatConversationId,
+      taskContext?.taskId,
+      taskContext?.huCode,
+      taskContext?.cellLabel,
+      onWorkAreaChatProposals,
+    ],
   );
 
   /** Panel lateral (sesión + índice); persistido para la próxima visita */
@@ -996,12 +1177,7 @@ export function WorkspacePage() {
 
   useEffect(() => {
     setWorkAreaResolvedDraft(null);
-  }, [
-    workAreaSelectedId,
-    workAreaSelectedId != null
-      ? workAreaPanelProposals.find((x) => x.id === workAreaSelectedId)?.content
-      : undefined,
-  ]);
+  }, [workAreaSelectedId]);
 
   useEffect(() => {
     if (fileViewSource !== "workarea" || !workAreaSelectedId) return;
@@ -1346,6 +1522,7 @@ export function WorkspacePage() {
   useEffect(() => {
     if (!getUserId()?.trim()) return;
     let cancelled = false;
+    setChatHistoryHydrated(false);
     (async () => {
       try {
         setChatHistoryErr(null);
@@ -1360,7 +1537,10 @@ export function WorkspacePage() {
             setChatTurns(entries);
           }
         } else {
-          if (!baseChatConversationId) return;
+          if (!baseChatConversationId) {
+            if (!cancelled) setChatHistoryHydrated(true);
+            return;
+          }
           const { entries } = await fetchChatHistory(50, { conversationId: baseChatConversationId });
           if (!cancelled) setChatTurns(entries);
         }
@@ -1368,6 +1548,8 @@ export function WorkspacePage() {
         if (!cancelled) {
           setChatHistoryErr(e instanceof Error ? e.message : String(e));
         }
+      } finally {
+        if (!cancelled) setChatHistoryHydrated(true);
       }
     })();
     return () => {
@@ -1427,111 +1609,55 @@ export function WorkspacePage() {
     refreshWorkAreaS3List,
   ]);
 
-  /** Primer mensaje del chat al abrir una tarea de soporte (prompt con prefijo fijado en backend). */
+  /** Primer mensaje automático solo al crear una tarea nueva (`initialChatPrompt` en el state de la ruta). */
   useEffect(() => {
     if (!ingestComplete || !initialChatPromptFromTask) return;
-    let storageKey: string | null = null;
-    try {
-      storageKey = `docviz:autoTaskChat:${connect?.usuario ?? "u"}:${initialChatPromptFromTask.slice(0, 120)}`;
-      if (sessionStorage.getItem(storageKey)) return;
-      sessionStorage.setItem(storageKey, "1");
-    } catch {
-      /* private mode */
-    }
-    const prompt = initialChatPromptFromTask;
+    const dedupe =
+      taskContext?.taskId != null
+        ? `docviz:autoTaskChat:${connect?.usuario ?? "u"}:task-${taskContext.taskId}`
+        : `docviz:autoTaskChat:${connect?.usuario ?? "u"}:p-${initialChatPromptFromTask.slice(0, 96)}`;
+    let cancelled = false;
+    void runAutoInitialChatStream(initialChatPromptFromTask, dedupe, () => cancelled);
+    return () => {
+      cancelled = true;
+      setChatLoading(false);
+    };
+  }, [ingestComplete, initialChatPromptFromTask, connect?.usuario, taskContext?.taskId, runAutoInitialChatStream]);
+
+  /**
+   * «Continuar en workspace» sin prompt en la ruta: si tras cargar Firestore no hay turnos,
+   * se obtiene el prompt desde el backend y se envía una vez (primer enunciado aún no procesado).
+   */
+  useEffect(() => {
+    if (!ingestComplete || !resumeWorkspaceChat || !chatHistoryHydrated) return;
+    if (chatTurns.length > 0) return;
+    if (!taskContext?.taskId) return;
     let cancelled = false;
     void (async () => {
-      setChatErr(null);
-      setChatLoading(true);
-      const streamId = `stream-task-${Date.now()}`;
-      setChatTurns((prev) => [
-        ...prev,
-        {
-          id: streamId,
-          question: prompt,
-          answer: "",
-          sources: [],
-          repoLabel: "",
-          createdAt: new Date().toISOString(),
-        },
-      ]);
       try {
-        let convForWs = baseChatConversationId;
-        if (taskContext?.taskId != null && taskContext?.huCode?.trim()) {
-          const r = await fetchChatHistory(50, {
-            taskId: taskContext.taskId,
-            huCode: taskContext.huCode,
-            ...(taskContext.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
-          });
-          if (r.resolvedConversationId) {
-            setResolvedPrimaryChatId(r.resolvedConversationId);
-            convForWs = r.resolvedConversationId;
-          }
-        }
-        await streamVectorChat(
-          prompt,
-          {
-            onStart: (sources) => {
-              setChatTurns((prev) => prev.map((t) => (t.id === streamId ? { ...t, sources } : t)));
-            },
-            onDelta: (text) => {
-              setChatTurns((prev) => prev.map((t) => (t.id === streamId ? { ...t, answer: t.answer + text } : t)));
-            },
-            onProposals: onWorkAreaChatProposals,
-          },
-          {
-            taskHuCode: taskContext?.huCode,
-            ...(taskContext?.taskId != null ? { taskId: taskContext.taskId } : {}),
-            ...(convForWs ? { conversationId: convForWs } : {}),
-            ...(taskContext?.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
-          },
-        );
-        try {
-          const { entries: rows } =
-            taskContext?.taskId != null && taskContext?.huCode?.trim()
-              ? await fetchChatHistory(50, {
-                  taskId: taskContext.taskId,
-                  huCode: taskContext.huCode,
-                  ...(taskContext.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
-                })
-              : await fetchChatHistory(50, { conversationId: convForWs });
-          setChatHistoryErr(null);
-          setChatTurns((prev) => {
-            const local = prev.find((t) => t.id === streamId);
-            return mergeFirestoreHistoryWithLocalStream(rows, local, prompt);
-          });
-        } catch {
-          /* igual que onChat */
-        }
+        const cont = await continueTask(taskContext.taskId!);
+        if (cancelled) return;
+        const prompt = cont.initialChatPrompt?.trim();
+        if (!prompt) return;
+        const dedupe = `docviz:autoResumeFirst:${taskContext.taskId}`;
+        await runAutoInitialChatStream(prompt, dedupe, () => cancelled);
       } catch (e) {
         if (!cancelled) {
           setChatErr(e instanceof Error ? e.message : String(e));
-          if (storageKey) {
-            try {
-              sessionStorage.removeItem(storageKey);
-            } catch {
-              /* ignore */
-            }
-          }
         }
-      } finally {
-        if (!cancelled) setChatLoading(false);
       }
     })();
     return () => {
       cancelled = true;
-      // Si el efecto se invalida (F5, cambio de tarea, etc.) el `finally` no pone loading a false;
-      // sin esto el botón puede quedar en «Pensando…» para siempre.
       setChatLoading(false);
     };
   }, [
     ingestComplete,
-    initialChatPromptFromTask,
-    connect?.usuario,
-    taskContext?.huCode,
+    resumeWorkspaceChat,
+    chatHistoryHydrated,
+    chatTurns.length,
     taskContext?.taskId,
-    taskContext?.cellLabel,
-    baseChatConversationId,
+    runAutoInitialChatStream,
   ]);
 
 
@@ -1827,7 +1953,7 @@ export function WorkspacePage() {
     ]);
 
     try {
-      let convForWs = baseChatConversationId;
+      let convForChat = baseChatConversationId;
       if (taskContext?.taskId != null && taskContext?.huCode?.trim()) {
         const r = await fetchChatHistory(50, {
           taskId: taskContext.taskId,
@@ -1836,7 +1962,7 @@ export function WorkspacePage() {
         });
         if (r.resolvedConversationId) {
           setResolvedPrimaryChatId(r.resolvedConversationId);
-          convForWs = r.resolvedConversationId;
+          convForChat = r.resolvedConversationId;
         }
       }
 
@@ -1858,7 +1984,7 @@ export function WorkspacePage() {
         {
           taskHuCode: taskContext?.huCode,
           ...(taskContext?.taskId != null ? { taskId: taskContext.taskId } : {}),
-          ...(convForWs ? { conversationId: convForWs } : {}),
+          ...(convForChat ? { conversationId: convForChat } : {}),
           ...(taskContext?.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
         },
       );
@@ -1883,7 +2009,7 @@ export function WorkspacePage() {
                 huCode: taskContext.huCode,
                 ...(taskContext.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
               })
-            : await fetchChatHistory(50, { conversationId: convForWs });
+            : await fetchChatHistory(50, { conversationId: convForChat });
 
         setChatHistoryErr(null);
 
@@ -2595,7 +2721,7 @@ export function WorkspacePage() {
                       >
                         <WorkAreaIconTrash />
                       </button>
-                      {isWorkareaS3Artifact(selectedWorkAreaProposal) ? (
+                      {isEditableS3Artifact(selectedWorkAreaProposal) ? (
                         !workAreaS3Editing ? (
                           <button
                             type="button"
@@ -2615,7 +2741,9 @@ export function WorkspacePage() {
                             >
                               {workAreaKeepLoadingId === selectedWorkAreaProposal.id
                                 ? "Guardando…"
-                                : "Guardar y reindexar"}
+                                : isWorkareaS3Artifact(selectedWorkAreaProposal)
+                                  ? "Guardar y reindexar"
+                                  : "Guardar borrador en S3"}
                             </button>
                             <button type="button" className="btn" onClick={cancelWorkAreaS3Edit}>
                               Cancelar
@@ -2629,6 +2757,20 @@ export function WorkspacePage() {
                 <div className="workspace__file-toolbar workspace__file-toolbar--work-area">
                   {selectedWorkAreaProposal.draftRelativePath && (
                     <>
+                      {workAreaCloneDraftEditing ? (
+                        <button type="button" className="btn" onClick={cancelWorkAreaCloneDraftEdit}>
+                          Cancelar edición
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={workAreaKeepLoadingId !== null}
+                          onClick={startWorkAreaCloneDraftEdit}
+                        >
+                          Editar texto
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="btn primary"
@@ -2720,14 +2862,25 @@ export function WorkspacePage() {
                       </div>
                     );
                   }
-                  if (workAreaS3Editing && isWorkareaS3Artifact(p)) {
+                  if (workAreaS3Editing && isEditableS3Artifact(p)) {
                     return (
                       <textarea
                         className="workspace__workarea-s3-editor"
                         value={workAreaS3EditDraft}
                         onChange={(e) => setWorkAreaS3EditDraft(e.target.value)}
                         spellCheck={false}
-                        aria-label={`Editar ${p.fileName}`}
+                        aria-label={`Editar borrador ${p.fileName}`}
+                      />
+                    );
+                  }
+                  if (workAreaCloneDraftEditing && p.draftRelativePath && !p.artifactViewOnly) {
+                    return (
+                      <textarea
+                        className="workspace__workarea-s3-editor"
+                        value={workAreaCloneDraftBuffer}
+                        onChange={(e) => setWorkAreaCloneDraftBuffer(e.target.value)}
+                        spellCheck={false}
+                        aria-label={`Editar borrador ${p.fileName}`}
                       />
                     );
                   }
@@ -2945,8 +3098,9 @@ export function WorkspacePage() {
 
           <div className="chat-thread">
 
-            {chatTurns.map((t, turnIdx) => (
-
+            {chatTurns.map((t, turnIdx) => {
+              const { entradaUsuario, promptFinal } = splitRagChatQuestion(t.question);
+              return (
               <article
                 key={t.id}
                 className={
@@ -2958,9 +3112,16 @@ export function WorkspacePage() {
 
                 <div className="chat-thread__question">
 
-                  <span className="chat-thread__label">Tú</span>
+                  <span className="chat-thread__label">Tu mensaje</span>
 
-                  <div className="chat-thread__question-text">{t.question}</div>
+                  <div className="chat-thread__question-user">{entradaUsuario}</div>
+
+                  {promptFinal ? (
+                    <details className="chat-thread__thinking">
+                      <summary className="chat-thread__thinking-summary">Pensando · instrucciones al modelo</summary>
+                      <pre className="chat-thread__thinking-pre">{promptFinal}</pre>
+                    </details>
+                  ) : null}
 
                 </div>
 
@@ -3003,7 +3164,7 @@ export function WorkspacePage() {
 
               </article>
 
-            ))}
+            );})}
 
           </div>
 

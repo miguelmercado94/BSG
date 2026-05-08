@@ -15,12 +15,12 @@
     <artifactId>backend-sesion1</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>Document Context Visualizer API</name>
-    <description>Git explorer + RAG (PostgreSQL/pgvector o Pinecone) + chat local (Ollama) o develop (Gemini)</description>
+    <description>Git explorer + RAG (PostgreSQL/pgvector o Pinecone) + chat local (Ollama) o nube (OpenAI chat + embeddings)</description>
 
     <properties>
         <java.version>21</java.version>
-        <!-- 1.1.x: starter google-genai (API key Gemini) -->
-        <spring-ai.version>1.1.4</spring-ai.version>
+        <!-- 1.1.5+: evita 400 extra_body en POST /v1/chat/completions (spring-ai#5196, PR#5321) -->
+        <spring-ai.version>1.1.5</spring-ai.version>
     </properties>
 
     <dependencyManagement>
@@ -46,10 +46,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -110,10 +106,10 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-ollama</artifactId>
         </dependency>
-        <!-- Misma imagen Docker / JAR: el modo Ollama vs Gemini lo fija SPRING_PROFILES_ACTIVE en runtime (compose, Railway, .env). -->
+        <!-- Chat compatible OpenAI (API oficial). Perfiles pdn/develop: api.openai.com + OPENAI_API_KEY. -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-google-genai</artifactId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

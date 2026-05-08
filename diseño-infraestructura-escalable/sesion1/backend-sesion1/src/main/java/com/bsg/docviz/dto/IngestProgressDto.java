@@ -71,17 +71,30 @@ public class IngestProgressDto {
 
     /**
      * Último evento del stream {@code POST /admin/cells/{id}/repos/stream}: fila persistida y stats finales.
+     * Si acaba de ejecutarse una ingesta, pasar {@code justIngested} para que el NDJSON lleve los mismos
+     * conteos que {@link #done(VectorIngestResponse)} aunque el {@link CellRepoResponse} leído de BD aún no
+     * refleje {@code last_ingest_*} (p. ej. lectura desfasada o mapeo).
      */
     public static IngestProgressDto cellRepoReady(CellRepoResponse r) {
+        return cellRepoReady(r, null);
+    }
+
+    public static IngestProgressDto cellRepoReady(CellRepoResponse r, VectorIngestResponse justIngested) {
         IngestProgressDto d = new IngestProgressDto();
         d.setPhase("CELL_REPO_READY");
         d.setCellRepoId(r.id());
         d.setDisplayName(r.displayName());
         d.setLinkedWithoutReindex(r.linkedWithoutReindex());
-        d.setFilesProcessed(r.lastIngestFiles() != null ? r.lastIngestFiles() : 0);
-        d.setChunksIndexed(r.lastIngestChunks() != null ? r.lastIngestChunks() : 0);
         d.setNamespace(r.vectorNamespace());
-        d.setSkipped(r.lastIngestSkipped() != null ? r.lastIngestSkipped() : List.of());
+        if (justIngested != null) {
+            d.setFilesProcessed(justIngested.getFilesProcessed());
+            d.setChunksIndexed(justIngested.getChunksIndexed());
+            d.setSkipped(justIngested.getSkipped() != null ? justIngested.getSkipped() : List.of());
+        } else {
+            d.setFilesProcessed(r.lastIngestFiles() != null ? r.lastIngestFiles() : 0);
+            d.setChunksIndexed(r.lastIngestChunks() != null ? r.lastIngestChunks() : 0);
+            d.setSkipped(r.lastIngestSkipped() != null ? r.lastIngestSkipped() : List.of());
+        }
         return d;
     }
 
