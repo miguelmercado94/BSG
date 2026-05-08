@@ -1,12 +1,18 @@
+# DocViz Sesión 1: compilar, imagen Docker Hub, actualizar servicios ECS Fargate (solo imagen).
+# Terraform puede seguir gestionando red/RDS; los despliegues de versión van por aquí.
+#
+# - PR → main: validación (Maven / npm build), sin push a Docker Hub ni ECS.
+# - Push → main (p. ej. merge del PR): build, push de imagen y deploy ECS si cambió ese proyecto.
+
 name: DocViz Sesión 1 - Docker Hub Versionado
 
 on:
   push:
-    branches: 
+    branches:
       - BSG-DIE-SESION1
       - main
   pull_request:
-    branches: 
+    branches:
       - main
 
 concurrency:
@@ -14,8 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Ruta base para búsqueda (flexible ante minúsculas/mayúsculas)
-  SESION_ROOT: "diseño-infraestructura-escalable/sesion1"
+  ECS_CLUSTER: bsg-cluster
+  AWS_REGION: us-east-1
 
 jobs:
   changes:
@@ -38,7 +44,6 @@ jobs:
             security:
               - '**/back-security-sesion1/**'
 
-  # Job de Pruebas y Compilación (Java 21)
   test-java:
     needs: changes
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.security == 'true'
@@ -71,7 +76,6 @@ jobs:
               echo "Error: no se encontró el directorio back-security-sesion1"
               exit 1
             fi
-            # Verifica si es Gradle o Maven
             if [ -f "$SECURITY_DIR/gradlew" ]; then
               echo "Construyendo seguridad con Gradle en: $SECURITY_DIR"
               chmod +x "$SECURITY_DIR/gradlew"
@@ -82,18 +86,42 @@ jobs:
             fi
           fi
 
-  # Job de Construcción y Subida a Docker Hub
+  test-frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: diseño-infraestructura-escalable/sesion1/frontend-sesion1/package-lock.json
+
+      - name: npm ci && build (validación PR / push)
+        run: |
+          set -euo pipefail
+          FE=$(find . -type d -name "frontend-sesion1" | head -n 1)
+          if [ -z "$FE" ]; then
+            echo "Error: no se encontró frontend-sesion1"
+            exit 1
+          fi
+          cd "$FE"
+          npm ci
+          npm run build
+
   build-and-push:
-    needs: [changes, test-java]
+    needs: [changes, test-java, test-frontend]
     if: |
-      always() && 
-      github.event_name == 'push' && 
-      (needs.test-java.result == 'success' || needs.test-java.result == 'skipped')
+      always() &&
+      github.event_name == 'push' &&
+      (needs.test-java.result == 'success' || needs.test-java.result == 'skipped') &&
+      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped')
     runs-on: ubuntu-latest
     strategy:
       matrix:
         project: [back-security-sesion1, backend-sesion1, frontend-sesion1]
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -104,13 +132,30 @@ jobs:
           if [[ "${{ matrix.project }}" == "back-security-sesion1" && "${{ needs.changes.outputs.security }}" == "true" ]]; then SHOULD_RUN="true"; fi
           if [[ "${{ matrix.project }}" == "backend-sesion1" && "${{ needs.changes.outputs.backend }}" == "true" ]]; then SHOULD_RUN="true"; fi
           if [[ "${{ matrix.project }}" == "frontend-sesion1" && "${{ needs.changes.outputs.frontend }}" == "true" ]]; then SHOULD_RUN="true"; fi
-          echo "run=$SHOULD_RUN" >> $GITHUB_OUTPUT
+          echo "run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.run == 'true' && matrix.project == 'backend-sesion1'
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Maven package (JAR para Dockerfile backend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'backend-sesion1'
+        run: |
+          set -euo pipefail
+          REAL_PATH=$(find . -type d -name "backend-sesion1" | head -n 1)
+          if [ -z "$REAL_PATH" ]; then
+            echo "Error: no se encontró backend-sesion1"
+            exit 1
+          fi
+          mvn -f "$REAL_PATH/pom.xml" clean package -DskipTests
 
       - name: Login to Docker Hub
         if: steps.check.outputs.run == 'true'
         uses: docker/login-action@v3
         with:
-          # NOMBRES DE SECRETOS ACTUALIZADOS
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
@@ -125,32 +170,33 @@ jobs:
       - name: Docker Build and Push
         if: steps.check.outputs.run == 'true'
         run: |
-          # Buscar la ruta real de la carpeta del proyecto
+          set -euo pipefail
           REAL_PATH=$(find . -type d -name "${{ matrix.project }}" | head -n 1)
           if [ -z "$REAL_PATH" ]; then
             echo "Error: No se encontró la carpeta para ${{ matrix.project }}"
             exit 1
           fi
-          
-          VERSION=$(cat "$REAL_PATH/version.txt" | xargs)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          VERSION=$(xargs < "$REAL_PATH/version.txt")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           REPO_NAME="${{ secrets.DOCKER_USERNAME }}/${{ matrix.project }}"
-          
+
           echo "Construyendo imagen desde: $REAL_PATH con versión $VERSION"
-          
+
           docker build -t "$REPO_NAME:$VERSION" -t "$REPO_NAME:latest" -f "$REAL_PATH/Dockerfile" "$REAL_PATH"
           docker push "$REPO_NAME:$VERSION"
           docker push "$REPO_NAME:latest"
 
       - name: Configure AWS credentials
-        if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
+        if: steps.check.outputs.run == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Download current ECS task definition
+      # --- ECS: back-security ---
+      - name: Download ECS task definition (back-security)
         if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
         run: |
           aws ecs describe-task-definition --task-definition bsg-back-security --query taskDefinition | jq -r 'del(
@@ -163,20 +209,84 @@ jobs:
             .registeredBy
           )' > task-definition.json
 
-      - name: Render Amazon ECS task definition
+      - name: Render ECS task definition (back-security)
         if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
-        id: render-task-def
+        id: render-security
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-definition.json
           container-name: back-security
           image: ${{ secrets.DOCKER_USERNAME }}/back-security-sesion1:${{ env.VERSION }}
 
-      - name: Deploy to Amazon ECS
+      - name: Deploy ECS (back-security)
         if: steps.check.outputs.run == 'true' && matrix.project == 'back-security-sesion1'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
-          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          task-definition: ${{ steps.render-security.outputs.task-definition }}
           service: bsg-back-security-service
-          cluster: bsg-cluster
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # --- ECS: DocViz backend ---
+      - name: Download ECS task definition (backend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'backend-sesion1'
+        run: |
+          aws ecs describe-task-definition --task-definition bsg-backend --query taskDefinition | jq -r 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' > task-definition-backend.json
+
+      - name: Render ECS task definition (backend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'backend-sesion1'
+        id: render-backend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-backend.json
+          container-name: backend
+          image: ${{ secrets.DOCKER_USERNAME }}/backend-sesion1:${{ env.VERSION }}
+
+      - name: Deploy ECS (backend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'backend-sesion1'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-backend.outputs.task-definition }}
+          service: bsg-backend-service
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # --- ECS: frontend SPA ---
+      - name: Download ECS task definition (frontend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'frontend-sesion1'
+        run: |
+          aws ecs describe-task-definition --task-definition bsg-frontend --query taskDefinition | jq -r 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' > task-definition-frontend.json
+
+      - name: Render ECS task definition (frontend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'frontend-sesion1'
+        id: render-frontend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-frontend.json
+          container-name: frontend
+          image: ${{ secrets.DOCKER_USERNAME }}/frontend-sesion1:${{ env.VERSION }}
+
+      - name: Deploy ECS (frontend)
+        if: steps.check.outputs.run == 'true' && matrix.project == 'frontend-sesion1'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-frontend.outputs.task-definition }}
+          service: bsg-frontend-service
+          cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
