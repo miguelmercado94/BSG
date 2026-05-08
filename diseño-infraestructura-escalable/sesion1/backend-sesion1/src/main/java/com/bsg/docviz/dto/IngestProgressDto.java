@@ -31,6 +31,14 @@ public class IngestProgressDto {
         return d;
     }
 
+    /** Paso intermedio sin contadores (p. ej. antes de clonar Git): solo mensaje para el cliente NDJSON. */
+    public static IngestProgressDto detail(String detail) {
+        IngestProgressDto d = new IngestProgressDto();
+        d.setPhase("PROGRESS");
+        d.setDetail(detail);
+        return d;
+    }
+
     public static IngestProgressDto file(int totalFiles, int filesProcessedSoFar, int chunksIndexed, String currentFile) {
         IngestProgressDto d = new IngestProgressDto();
         d.setPhase("FILE");

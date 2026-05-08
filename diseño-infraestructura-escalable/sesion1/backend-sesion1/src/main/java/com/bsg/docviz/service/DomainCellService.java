@@ -315,7 +315,14 @@ public class DomainCellService {
                 try {
                     GitConnectRequest g = buildGitConnectFromRequest(req);
                     g.setVectorNamespace(vectorNs);
+                    if (onProgress != null) {
+                        onProgress.accept(
+                                IngestProgressDto.detail("Clonando y conectando al repositorio (puede tardar varios minutos)…"));
+                    }
                     gitRepositoryService.connect(g);
+                    if (onProgress != null) {
+                        onProgress.accept(IngestProgressDto.detail("Vectorizando archivos…"));
+                    }
                     ingestResult = vectorIngestService.ingestAll(onProgress, vectorNs);
                     String skippedJson =
                             objectMapper.writeValueAsString(
@@ -437,7 +444,14 @@ public class DomainCellService {
                 try {
                     GitConnectRequest g = buildGitConnectFromRequest(req);
                     g.setVectorNamespace(vectorNs);
+                    if (onProgress != null) {
+                        onProgress.accept(
+                                IngestProgressDto.detail("Clonando y conectando al repositorio (puede tardar varios minutos)…"));
+                    }
                     gitRepositoryService.connect(g);
+                    if (onProgress != null) {
+                        onProgress.accept(IngestProgressDto.detail("Vectorizando archivos…"));
+                    }
                     ingestResult = vectorIngestService.ingestAll(onProgress, vectorNs);
                     String skippedJson =
                             objectMapper.writeValueAsString(

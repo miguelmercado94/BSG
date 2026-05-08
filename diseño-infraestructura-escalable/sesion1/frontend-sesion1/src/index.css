@@ -727,6 +727,20 @@ textarea {
   color: #9aa7b5;
 }
 
+.ingest-progress__file--primary {
+  white-space: normal;
+  overflow: visible;
+  font-size: 0.78rem;
+  color: #dfe6ef;
+  margin-bottom: 0.35rem;
+}
+
+.ingest-progress__file-path {
+  font-size: 0.76rem;
+  word-break: break-all;
+  color: #e8eef6;
+}
+
 .ingest-progress__track--bar {
   height: 4px;
   margin-top: 0.2rem;

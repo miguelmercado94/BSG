@@ -220,7 +220,8 @@ resource "aws_apigatewayv2_stage" "bsg_gateway_default_stage" {
 }
 
 locals {
-  # Base del HTTP API v2 ($default): sin barra final. El SPA (runtime-config.js) usa estas URLs absolutas.
+  # Base pública del HTTP API (tests/cURL externos). El SPA en el ALB NO debe apuntar aquí:
+  # API Gateway HTTP tiene tope ~30s en integraciones → 503 en NDJSON largos (/vector/ingest/stream, rag-turn, etc.).
   api_gateway_http_base = trimsuffix(aws_apigatewayv2_api.bsg_gateway.api_endpoint, "/")
 }
 
@@ -749,9 +750,9 @@ resource "aws_ecs_task_definition" "frontend_task" {
     essential    = true
     portMappings = [{ containerPort = 80, hostPort = 80, protocol = "tcp" }]
     environment = [
-      { name = "BACKEND_URL", value = "${local.api_gateway_http_base}/docviz" },
-      { name = "SECURITY_URL", value = "${local.api_gateway_http_base}/security-auth" },
-      # Peticiones largas al DocViz (p. ej. chat RAG): Nginx del SPA hace proxy al backend interno (Cloud Map).
+      # Rutas relativas al mismo ALB: Nginx /api/ y /security-api/ → Cloud Map (timeouts largos). Evita API Gateway en el navegador.
+      { name = "BACKEND_URL", value = "/api" },
+      { name = "SECURITY_URL", value = "/security-api" },
       { name = "DOCVIZ_UPSTREAM", value = "http://docviz.bsg.internal:8080" },
       { name = "SECURITY_UPSTREAM", value = "http://security.bsg.internal:8081" },
       { name = "NGINX_RESOLVER", value = "169.254.169.253" },
