@@ -129,7 +129,7 @@ export function buildResolvedDocvizMerge(text: string, choice: "ours" | "theirs"
     const theirsIdx = indexOfTheirs(text, bodyStart);
     if (theirsIdx < 0) return text;
     const markerLen =
-      text.startsWith(MARKER_THEIRS, theirsIdx) ? MARKER_THEIRS.length() : LEGACY_THEIRS.length();
+      text.startsWith(MARKER_THEIRS, theirsIdx) ? MARKER_THEIRS.length : LEGACY_THEIRS.length;
     const afterTheirs = text.indexOf("\n", theirsIdx + markerLen);
     blockEndExclusive = afterTheirs < 0 ? text.length : afterTheirs + 1;
   }

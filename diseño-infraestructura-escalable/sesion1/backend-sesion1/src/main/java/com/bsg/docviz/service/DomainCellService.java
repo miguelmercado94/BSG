@@ -4,6 +4,8 @@ import com.bsg.docviz.application.port.output.GitRepositoryPort;
 import com.bsg.docviz.crypto.CredentialCryptoService;
 import com.bsg.docviz.dto.CellRepoRequest;
 import com.bsg.docviz.dto.CellRepoResponse;
+import com.bsg.docviz.dto.PendingIndexBeginResponse;
+import com.bsg.docviz.dto.SinglePathIngestResult;
 import com.bsg.docviz.dto.CellRepoUrlHintResponse;
 import com.bsg.docviz.dto.CellRequest;
 import com.bsg.docviz.dto.CellResponse;
@@ -59,6 +61,10 @@ public class DomainCellService {
     private final ObjectProvider<SupportS3Service> supportS3Service;
     private final SupportS3PathBuilder supportS3PathBuilder;
     private final ConcurrentHashMap<String, Object> ingestLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> pendingIndexFlowLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> pendingIndexRepoByUser = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, PendingIngestAccumulator> pendingIndexAccumByUser =
+            new ConcurrentHashMap<>();
 
     public DomainCellService(
             CellJdbcRepository cellRepository,
@@ -528,6 +534,257 @@ public class DomainCellService {
             vectorIngestService.clearNamespace(e.vectorNamespace());
         }
         cellRepoRepository.delete(repoId);
+    }
+
+    private Object pendingFlowLock(String userId) {
+        return pendingIndexFlowLocks.computeIfAbsent(userId, k -> new Object());
+    }
+
+    private static final class PendingIngestAccumulator {
+        private final List<String> skippedLines = new ArrayList<>();
+        private int filesIndexed;
+        private int chunks;
+
+        private void accept(SinglePathIngestResult r) {
+            if (r.indexed()) {
+                filesIndexed++;
+                chunks += r.chunksIndexed();
+            } else if (r.skipped()) {
+                skippedLines.add(r.path() + ": " + r.skipReason());
+            } else if (r.errorMessage() != null && !r.errorMessage().isBlank()) {
+                skippedLines.add(r.path() + ": " + r.errorMessage());
+            }
+        }
+    }
+
+    /**
+     * Paso 1 del indexado por archivo: crea o reutiliza fila en BD, enlaza copia si ya existe en una célula,
+     * conecta Git (sesión servidor) y prepara reindexación completa si el huérfano ya existía.
+     */
+    public PendingIndexBeginResponse beginPendingFileIndex(CellRepoRequest req) {
+        validateMode(req);
+        if (req.connectionMode() == GitConnectionMode.HTTPS_AUTH
+                && (req.credentialPlain() == null || req.credentialPlain().isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Credencial requerida para HTTPS con autenticación");
+        }
+        String modeStr = req.connectionMode().name();
+        String repoKey =
+                RepositoryUrlNormalizer.normalizeRepositoryKey(req.repositoryUrl(), req.localPath(), modeStr);
+        if (repoKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL o ruta local requerida");
+        }
+
+        String userId = CurrentUser.require();
+        synchronized (pendingFlowLock(userId)) {
+            if (pendingIndexRepoByUser.containsKey(userId)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Ya hay una indexación pendiente; finalice o cancele antes de iniciar otra.");
+            }
+            gitRepositoryService.disconnectCleanup();
+
+            Object dbLock = ingestLocks.computeIfAbsent(repoKey, k -> new Object());
+            CellRepoEntity entity;
+            boolean brandNewRow = false;
+            synchronized (dbLock) {
+                Optional<CellRepoEntity> orphanOpt = cellRepoRepository.findOrphanByRepositoryKey(repoKey);
+                Optional<CellRepoEntity> firstAny = cellRepoRepository.findFirstByRepositoryKey(repoKey);
+
+                if (orphanOpt.isPresent()) {
+                    CellRepoEntity o = orphanOpt.get();
+                    if (o.linkedWithoutReindex()) {
+                        mergeOrphanMetaFromRequest(o.id(), o, req);
+                        ingestLocks.remove(repoKey, dbLock);
+                        return new PendingIndexBeginResponse(
+                                true,
+                                cellRepoRepository.findById(o.id()).map(this::toRepoDto).orElseThrow());
+                    }
+                    mergeOrphanMetaFromRequest(o.id(), o, req);
+                    entity = cellRepoRepository.findById(o.id()).orElseThrow();
+                } else if (firstAny.isPresent() && firstAny.get().cellId() != null) {
+                    CellRepoEntity src = firstAny.get();
+                    String displayName =
+                            req.displayName() != null && !req.displayName().isBlank()
+                                    ? req.displayName().trim()
+                                    : src.displayName();
+                    String tagsCsv =
+                            req.tagsCsv() != null && !req.tagsCsv().isBlank()
+                                    ? req.tagsCsv().trim()
+                                    : src.tagsCsv();
+                    long linkId =
+                            cellRepoRepository.insertLinkedFromCanonicalOrphan(src, tagsCsv, repoKey, displayName);
+                    CellRepoResponse dto = cellRepoRepository.findById(linkId).map(this::toRepoDto).orElseThrow();
+                    ingestLocks.remove(repoKey, dbLock);
+                    return new PendingIndexBeginResponse(true, dto);
+                } else {
+                    String displayName =
+                            req.displayName() != null && !req.displayName().isBlank()
+                                    ? req.displayName().trim()
+                                    : GitRepositoryService.slugFromGitUrl(
+                                            req.connectionMode() == GitConnectionMode.LOCAL
+                                                    ? (req.localPath() != null ? req.localPath() : "")
+                                                    : req.repositoryUrl());
+                    if (displayName.isBlank()) {
+                        displayName = "repo";
+                    }
+                    String vectorNs;
+                    if (req.vectorNamespace() != null && !req.vectorNamespace().isBlank()) {
+                        vectorNs = RepositoryUrlNormalizer.clampNamespace(req.vectorNamespace().trim(), NS_MAX);
+                    } else {
+                        vectorNs =
+                                RepositoryUrlNormalizer.clampNamespace(
+                                        displayName + "__" + UUID.randomUUID().toString().replace("-", ""), NS_MAX);
+                    }
+                    String enc = encryptCredential(req);
+                    String repoUrlToStore = req.repositoryUrl().trim();
+                    String localPathToStore = blankToNull(req.localPath());
+                    long id =
+                            cellRepoRepository.insert(
+                                    null,
+                                    displayName,
+                                    repoUrlToStore,
+                                    modeStr,
+                                    blankToNull(req.gitUsername()),
+                                    enc,
+                                    localPathToStore,
+                                    blankToNull(req.tagsCsv()),
+                                    vectorNs,
+                                    repoKey);
+                    entity = cellRepoRepository.findById(id).orElseThrow();
+                    brandNewRow = true;
+                }
+            }
+
+            try {
+                PendingIndexBeginResponse res = attachPendingGitSession(entity, userId);
+                ingestLocks.remove(repoKey, dbLock);
+                return res;
+            } catch (RuntimeException e) {
+                ingestLocks.remove(repoKey, dbLock);
+                if (brandNewRow) {
+                    cellRepoRepository.delete(entity.id());
+                }
+                throw e;
+            }
+        }
+    }
+
+    private void mergeOrphanMetaFromRequest(long orphanId, CellRepoEntity old, CellRepoRequest req) {
+        String displayName =
+                req.displayName() != null && !req.displayName().isBlank()
+                        ? req.displayName().trim()
+                        : old.displayName();
+        String tagsCsv =
+                req.tagsCsv() != null && !req.tagsCsv().isBlank()
+                        ? req.tagsCsv().trim()
+                        : old.tagsCsv();
+        String credEnc = null;
+        if (req.connectionMode() == GitConnectionMode.HTTPS_AUTH
+                && req.credentialPlain() != null
+                && !req.credentialPlain().isBlank()) {
+            credEnc = credentialCryptoService.encrypt(req.credentialPlain().trim());
+        }
+        cellRepoRepository.updateOrphanMeta(orphanId, displayName, tagsCsv, credEnc);
+    }
+
+    private PendingIndexBeginResponse attachPendingGitSession(CellRepoEntity entity, String userId) {
+        if (entity.vectorNamespace() != null && !entity.vectorNamespace().isBlank()) {
+            vectorIngestService.clearNamespace(entity.vectorNamespace().trim());
+        }
+        GitConnectRequest g = buildGitConnectFromEntity(entity);
+        try {
+            gitRepositoryService.connect(g);
+        } catch (RuntimeException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "No se pudo clonar o conectar: " + e.getMessage(), e);
+        }
+        pendingIndexRepoByUser.put(userId, entity.id());
+        pendingIndexAccumByUser.put(userId, new PendingIngestAccumulator());
+        CellRepoResponse dto = cellRepoRepository.findById(entity.id()).map(this::toRepoDto).orElseThrow();
+        return new PendingIndexBeginResponse(false, dto);
+    }
+
+    public List<String> listPendingIngestPaths(long repoId) {
+        String userId = CurrentUser.require();
+        synchronized (pendingFlowLock(userId)) {
+            Long pending = pendingIndexRepoByUser.get(userId);
+            if (pending == null || pending != repoId) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Sesión de indexación no iniciada para este repositorio");
+            }
+            assertPendingOrphanRepo(repoId);
+            try {
+                return vectorIngestService.listIndexableRelativePaths();
+            } catch (IllegalStateException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+            }
+        }
+    }
+
+    public SinglePathIngestResult ingestOnePendingFile(long repoId, String path) {
+        String userId = CurrentUser.require();
+        synchronized (pendingFlowLock(userId)) {
+            Long pending = pendingIndexRepoByUser.get(userId);
+            if (pending == null || pending != repoId) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Sesión de indexación no iniciada para este repositorio");
+            }
+            CellRepoEntity e =
+                    cellRepoRepository
+                            .findById(repoId)
+                            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Repositorio no encontrado"));
+            if (e.cellId() != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Solo repos pendientes (sin célula)");
+            }
+            String ns = e.vectorNamespace();
+            SinglePathIngestResult r =
+                    vectorIngestService.ingestSingleRelativePath(path, ns != null ? ns.trim() : null);
+            PendingIngestAccumulator acc = pendingIndexAccumByUser.get(userId);
+            if (acc != null) {
+                acc.accept(r);
+            }
+            return r;
+        }
+    }
+
+    public CellRepoResponse finishPendingFileIndex(long repoId) {
+        String userId = CurrentUser.require();
+        synchronized (pendingFlowLock(userId)) {
+            Long pending = pendingIndexRepoByUser.get(userId);
+            if (pending == null || pending != repoId) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Sesión de indexación no iniciada para este repositorio");
+            }
+            try {
+                PendingIngestAccumulator acc = pendingIndexAccumByUser.get(userId);
+                List<String> lines = acc != null ? acc.skippedLines : List.of();
+                String skippedJson = objectMapper.writeValueAsString(lines);
+                int files = acc != null ? acc.filesIndexed : 0;
+                int chunks = acc != null ? acc.chunks : 0;
+                cellRepoRepository.updateLastIngest(repoId, Instant.now(), files, chunks, skippedJson);
+                pendingIndexAccumByUser.remove(userId);
+                pendingIndexRepoByUser.remove(userId);
+                return cellRepoRepository.findById(repoId).map(this::toRepoDto).orElseThrow();
+            } catch (JsonProcessingException e) {
+                throw new IllegalStateException(e);
+            } finally {
+                gitRepositoryService.disconnectCleanup();
+            }
+        }
+    }
+
+    /** Cierra sesión Git sin persistir última ingesta (p. ej. error a mitad del bucle). */
+    public void abortPendingFileIndex(long repoId) {
+        String userId = CurrentUser.require();
+        synchronized (pendingFlowLock(userId)) {
+            Long p = pendingIndexRepoByUser.get(userId);
+            if (p == null || p != repoId) {
+                return;
+            }
+            pendingIndexRepoByUser.remove(userId);
+            pendingIndexAccumByUser.remove(userId);
+            gitRepositoryService.disconnectCleanup();
+        }
     }
 
     private GitConnectRequest buildGitConnectFromRequest(CellRepoRequest req) {

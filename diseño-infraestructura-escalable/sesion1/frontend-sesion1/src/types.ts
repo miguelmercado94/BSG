@@ -238,6 +238,22 @@ export interface CellRepoResponse {
   linkedWithoutReindex?: boolean;
 }
 
+/** POST /admin/cells/pending/index/begin */
+export interface PendingIndexBeginResponse {
+  linkedWithoutReindex: boolean;
+  repo: CellRepoResponse;
+}
+
+/** POST /admin/cells/pending/{repoId}/ingest-one */
+export interface SinglePathIngestResultDto {
+  indexed: boolean;
+  skipped: boolean;
+  path: string;
+  chunksIndexed: number;
+  skipReason: string | null;
+  errorMessage: string | null;
+}
+
 /** GET /admin/cells/hints/repo-url */
 export interface CellRepoUrlHint {
   displayName: string;
@@ -300,6 +316,8 @@ export interface SupportMarkdownObjectDto {
   objectKey: string;
   fileName: string;
   url: string;
+  /** Etiqueta breve para listados (p. ej. HU); opcional si el API no la envía. */
+  displayLabel?: string | null;
 }
 
 /** GET /vector/work-area/s3-objects?kind=… o GET /vector/work-area/s3-artifacts (listado unificado). */

@@ -3,6 +3,9 @@ package com.bsg.docviz.presentation.controller;
 import com.bsg.docviz.dto.CellRepoAssignRequest;
 import com.bsg.docviz.dto.CellRepoRequest;
 import com.bsg.docviz.dto.CellRepoResponse;
+import com.bsg.docviz.dto.PendingIndexBeginResponse;
+import com.bsg.docviz.dto.PendingIngestOneRequest;
+import com.bsg.docviz.dto.SinglePathIngestResult;
 import com.bsg.docviz.dto.CellRepoUrlHintResponse;
 import com.bsg.docviz.dto.CellRequest;
 import com.bsg.docviz.dto.CellResponse;
@@ -167,6 +170,36 @@ public class CellAdminController {
                 .header("X-Accel-Buffering", "no")
                 .contentType(MediaType.parseMediaType("application/x-ndjson"))
                 .body(stream);
+    }
+
+    /**
+     * Indexación pendiente en pasos (sin NDJSON largo): begin → lista de rutas → ingest-one por archivo → finish.
+     */
+    @PostMapping("/pending/index/begin")
+    public PendingIndexBeginResponse beginPendingIndex(@Valid @RequestBody CellRepoRequest body) {
+        return domainCellService.beginPendingFileIndex(body);
+    }
+
+    @GetMapping("/pending/{repoId}/ingest-paths")
+    public List<String> pendingIngestPaths(@PathVariable long repoId) {
+        return domainCellService.listPendingIngestPaths(repoId);
+    }
+
+    @PostMapping("/pending/{repoId}/ingest-one")
+    public SinglePathIngestResult pendingIngestOne(
+            @PathVariable long repoId, @Valid @RequestBody PendingIngestOneRequest body) {
+        return domainCellService.ingestOnePendingFile(repoId, body.path());
+    }
+
+    @PostMapping("/pending/{repoId}/index/finish")
+    public CellRepoResponse pendingIndexFinish(@PathVariable long repoId) {
+        return domainCellService.finishPendingFileIndex(repoId);
+    }
+
+    @PostMapping("/pending/{repoId}/index/abort")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void pendingIndexAbort(@PathVariable long repoId) {
+        domainCellService.abortPendingFileIndex(repoId);
     }
 
     @DeleteMapping("/pending/{repoId}")

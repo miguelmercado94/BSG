@@ -1059,7 +1059,7 @@ export function WorkspacePage() {
         },
       ]);
       try {
-        let convForChat = baseChatConversationId;
+        let convForChat = chatConversationId;
         if (taskContext?.taskId != null && taskContext?.huCode?.trim()) {
           const r = await fetchChatHistory(50, {
             taskId: taskContext.taskId,
@@ -1537,11 +1537,11 @@ export function WorkspacePage() {
             setChatTurns(entries);
           }
         } else {
-          if (!baseChatConversationId) {
+          if (!chatConversationId) {
             if (!cancelled) setChatHistoryHydrated(true);
             return;
           }
-          const { entries } = await fetchChatHistory(50, { conversationId: baseChatConversationId });
+          const { entries } = await fetchChatHistory(50, { conversationId: chatConversationId });
           if (!cancelled) setChatTurns(entries);
         }
       } catch (e) {
@@ -1558,6 +1558,7 @@ export function WorkspacePage() {
   }, [
     ingestRetry,
     baseChatConversationId,
+    chatConversationId,
     taskContext?.taskId,
     taskContext?.huCode,
     taskContext?.cellLabel,
@@ -1953,7 +1954,7 @@ export function WorkspacePage() {
     ]);
 
     try {
-      let convForChat = baseChatConversationId;
+      let convForChat = chatConversationId;
       if (taskContext?.taskId != null && taskContext?.huCode?.trim()) {
         const r = await fetchChatHistory(50, {
           taskId: taskContext.taskId,

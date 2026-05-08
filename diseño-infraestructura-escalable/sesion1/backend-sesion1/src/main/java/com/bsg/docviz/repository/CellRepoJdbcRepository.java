@@ -302,6 +302,22 @@ public class CellRepoJdbcRepository {
         return id;
     }
 
+    /** Actualiza metadatos de un repo huérfano antes de reindexar; credencial solo si {@code credentialEncrypted} no es null. */
+    public boolean updateOrphanMeta(long id, String displayName, String tagsCsv, String credentialEncrypted) {
+        return jdbc.update(
+                """
+                UPDATE docviz_cell_repo SET display_name = ?, tags_csv = ?,
+                    credential_encrypted = COALESCE(?, credential_encrypted), updated_at = ?
+                WHERE id = ? AND cell_id IS NULL
+                """,
+                displayName,
+                tagsCsv,
+                credentialEncrypted,
+                Timestamp.from(Instant.now()),
+                id)
+                > 0;
+    }
+
     public boolean update(
             long id,
             String displayName,

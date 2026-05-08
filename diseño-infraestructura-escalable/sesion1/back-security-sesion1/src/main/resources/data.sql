@@ -51,6 +51,11 @@ INSERT INTO operation (path, name, http_method, module_id, permite_all, active) 
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/{cellId}/repos/{repoId}', 'DOC_ADMIN_CELL_REPO_DELETE', 'DELETE', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/{id}/delete-impact', 'DOC_ADMIN_CELLS_DELETE_IMPACT', 'GET', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/{cellId}/repos/{repoId}/delete-impact', 'DOC_ADMIN_CELL_REPO_DELETE_IMPACT', 'GET', 2, FALSE, TRUE);
+INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/pending/index/begin', 'DOC_ADMIN_PENDING_INDEX_BEGIN', 'POST', 2, FALSE, TRUE);
+INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/pending/{repoId}/ingest-paths', 'DOC_ADMIN_PENDING_INGEST_PATHS', 'GET', 2, FALSE, TRUE);
+INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/pending/{repoId}/ingest-one', 'DOC_ADMIN_PENDING_INGEST_ONE', 'POST', 2, FALSE, TRUE);
+INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/pending/{repoId}/index/finish', 'DOC_ADMIN_PENDING_INDEX_FINISH', 'POST', 2, FALSE, TRUE);
+INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/admin/cells/pending/{repoId}/index/abort', 'DOC_ADMIN_PENDING_INDEX_ABORT', 'POST', 2, FALSE, TRUE);
 
 -- Roles
 INSERT INTO role (name, active) VALUES ('ROLE_ADMINISTRATOR', TRUE);
@@ -76,7 +81,12 @@ WHERE name NOT IN (
     'DOC_ADMIN_CELL_REPO_PUT',
     'DOC_ADMIN_CELL_REPO_DELETE',
     'DOC_ADMIN_CELLS_DELETE_IMPACT',
-    'DOC_ADMIN_CELL_REPO_DELETE_IMPACT'
+    'DOC_ADMIN_CELL_REPO_DELETE_IMPACT',
+    'DOC_ADMIN_PENDING_INDEX_BEGIN',
+    'DOC_ADMIN_PENDING_INGEST_PATHS',
+    'DOC_ADMIN_PENDING_INGEST_ONE',
+    'DOC_ADMIN_PENDING_INDEX_FINISH',
+    'DOC_ADMIN_PENDING_INDEX_ABORT'
 );
 
 -- Usuario demo administrador (contrasena password — solo desarrollo)
