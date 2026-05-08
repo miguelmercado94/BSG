@@ -2,6 +2,7 @@ package com.bsg.docviz.vector;
 
 import com.bsg.docviz.config.VectorProperties;
 import com.bsg.docviz.dto.IngestProgressDto;
+import com.bsg.docviz.dto.SinglePathIngestResult;
 import com.bsg.docviz.dto.VectorIngestResponse;
 import com.bsg.docviz.security.CurrentUser;
 import com.bsg.docviz.security.UserIdSanitizer;
@@ -469,6 +470,199 @@ public class VectorIngestService {
             onProgress.accept(IngestProgressDto.done(r));
         }
         return r;
+    }
+
+    /**
+     * Rutas relativas indexables (mismos filtros que {@link #ingestAll(Consumer, String)}).
+     */
+    public List<String> listIndexableRelativePaths() {
+        if (props.isIngestClasspathSampleOnly()) {
+            return List.of(props.getClasspathSampleResource());
+        }
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        var session = sessionRegistry.current();
+        if (!session.isConnected()) {
+            throw new IllegalStateException("Not connected to a repository");
+        }
+        Path root = session.getRepositoryRoot();
+        if (root == null) {
+            throw new IllegalStateException("Not connected to a repository");
+        }
+        String rev = session.getRevisionSpec();
+        List<String> paths;
+        try {
+            paths = gitRepositoryService.listTrackedFiles(root, rev);
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot list files: " + e.getMessage(), e);
+        }
+        paths = RepoPathExclude.filterWorkspacePaths(paths);
+        List<String> indexable = new ArrayList<>();
+        for (String rel : paths) {
+            if (isIndexablePath(rel)) {
+                indexable.add(rel);
+            }
+        }
+        return indexable;
+    }
+
+    /**
+     * Indexa un único archivo bajo la revisión actual de la sesión Git (peticiones cortas, sin NDJSON largo).
+     */
+    public SinglePathIngestResult ingestSingleRelativePath(String relRaw, String namespaceOverride) {
+        if (props.isIngestClasspathSampleOnly()) {
+            String resourcePath = props.getClasspathSampleResource();
+            String wanted = normalizeRel(relRaw);
+            String canonical = normalizeRel(resourcePath);
+            if (!wanted.equals(canonical)) {
+                return SinglePathIngestResult.skipped(
+                        relRaw != null ? relRaw : "", "solo modo classpath: se esperaba " + resourcePath);
+            }
+            return ingestClasspathSampleSingle(namespaceOverride);
+        }
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        var session = sessionRegistry.current();
+        if (!session.isConnected()) {
+            return SinglePathIngestResult.failed(relRaw != null ? relRaw : "", "Sesión Git no conectada");
+        }
+        Path root = session.getRepositoryRoot();
+        if (root == null) {
+            return SinglePathIngestResult.failed(relRaw != null ? relRaw : "", "Sesión Git no conectada");
+        }
+        String rel = normalizeRel(relRaw);
+        if (rel.isEmpty()) {
+            return SinglePathIngestResult.failed(relRaw != null ? relRaw : "", "Ruta vacía");
+        }
+        if (rel.contains("..")) {
+            return SinglePathIngestResult.failed(rel, "Ruta inválida");
+        }
+        if (!isIndexablePath(rel)) {
+            return SinglePathIngestResult.skipped(rel, "tipo no indexable");
+        }
+        if (RepoPathExclude.filterWorkspacePaths(List.of(rel)).isEmpty()) {
+            return SinglePathIngestResult.skipped(rel, "ruta excluida (build/deps)");
+        }
+        String rev = session.getRevisionSpec();
+        FileContentCache blobCache = session.getIngestContentCache();
+        String ns =
+                namespaceOverride != null && !namespaceOverride.isBlank()
+                        ? namespaceOverride.trim()
+                        : currentNamespace();
+        String userLabel =
+                namespaceOverride != null && !namespaceOverride.isBlank()
+                        ? SHARED_VECTOR_USER_LABEL
+                        : CurrentUser.require().trim();
+
+        List<VectorRecord> batch = new ArrayList<>();
+        int[] chunksRef = new int[] {0};
+        try {
+            long size = gitRepositoryService.objectSizeBytes(root, rev, rel);
+            if (size > FileContentCache.MAX_SINGLE_FILE_BYTES) {
+                return SinglePathIngestResult.skipped(rel, "muy grande");
+            }
+            byte[] raw = blobCache.get(rel);
+            if (raw == null) {
+                raw = gitRepositoryService.materializeAndReadBytes(root, rev, rel);
+                blobCache.put(rel, raw);
+            }
+            String text = SourceTextExtractor.extractText(rel, raw);
+            if (text == null || text.isBlank()) {
+                return SinglePathIngestResult.skipped(rel, "sin texto");
+            }
+            List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
+            log.info("Vector ingest single file: {} ({} chunks)", rel, parts.size());
+            String displaySource = session.getRootFolderLabel() + "/" + rel;
+            vectorStore.deleteBySource(ns, displaySource);
+            appendEmbeddingsForParts(
+                    parts,
+                    displaySource,
+                    ns,
+                    userLabel,
+                    1,
+                    0,
+                    rel,
+                    null,
+                    batch,
+                    chunksRef);
+            if (!batch.isEmpty()) {
+                flushVectorBatch(ns, batch);
+            }
+            return SinglePathIngestResult.indexed(rel, chunksRef[0]);
+        } catch (RuntimeException ex) {
+            log.error("Vector ingest single file {}: {}", rel, ex.toString(), ex);
+            String msg = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+            return SinglePathIngestResult.failed(rel, msg);
+        } finally {
+            blobCache.remove(rel);
+            if (session.isEphemeralManagedClone()) {
+                gitRepositoryService.deleteMaterializedFileIfPresent(root, rel);
+            }
+        }
+    }
+
+    private SinglePathIngestResult ingestClasspathSampleSingle(String namespaceOverride) {
+        if (!props.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Vector store disabled");
+        }
+        if (!sessionRegistry.current().isConnected()) {
+            return SinglePathIngestResult.failed("", "Sesión Git no conectada");
+        }
+        String resourcePath = props.getClasspathSampleResource();
+        ClassPathResource res = new ClassPathResource(resourcePath);
+        if (!res.exists()) {
+            return SinglePathIngestResult.failed(resourcePath, "No existe en classpath: " + resourcePath);
+        }
+        final String text;
+        try (InputStream in = res.getInputStream()) {
+            text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return SinglePathIngestResult.failed(resourcePath, e.getMessage());
+        }
+        if (text.isBlank()) {
+            return SinglePathIngestResult.skipped(resourcePath, "vacío");
+        }
+        String ns =
+                namespaceOverride != null && !namespaceOverride.isBlank()
+                        ? namespaceOverride.trim()
+                        : currentNamespace();
+        String userLabel =
+                namespaceOverride != null && !namespaceOverride.isBlank()
+                        ? SHARED_VECTOR_USER_LABEL
+                        : CurrentUser.require().trim();
+        String displaySource = "classpath:" + resourcePath;
+        vectorStore.deleteBySource(ns, displaySource);
+        List<String> parts = TextChunker.chunk(text, props.getChunkSize(), props.getChunkOverlap());
+        List<VectorRecord> batch = new ArrayList<>();
+        int[] chunksRef = new int[] {0};
+        appendEmbeddingsForParts(
+                parts,
+                displaySource,
+                ns,
+                userLabel,
+                1,
+                0,
+                resourcePath,
+                null,
+                batch,
+                chunksRef);
+        if (!batch.isEmpty()) {
+            flushVectorBatch(ns, batch);
+        }
+        return SinglePathIngestResult.indexed(resourcePath, chunksRef[0]);
+    }
+
+    private static String normalizeRel(String relRaw) {
+        if (relRaw == null) {
+            return "";
+        }
+        String n = relRaw.trim().replace('\\', '/');
+        while (n.startsWith("/")) {
+            n = n.substring(1);
+        }
+        return n;
     }
 
     /**

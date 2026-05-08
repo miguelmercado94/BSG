@@ -49,6 +49,13 @@ server {
         expires -1;
     }
 
+    # Generado al arranque (BACKEND_URL/SECURITY_URL). Sin no-cache el navegador puede dejar
+    # __DOCVIZ_API_BASE__ apuntando al execute-api → streams NDJSON 503 y UI “pegada”.
+    location = /runtime-config.js {
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        expires -1;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

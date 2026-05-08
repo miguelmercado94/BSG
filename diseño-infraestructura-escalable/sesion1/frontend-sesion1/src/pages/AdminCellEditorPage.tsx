@@ -11,11 +11,15 @@ import {
   adminDeletePendingSupportMarkdown,
   adminDeleteRepo,
   adminFetchPendingRepoFile,
+  adminAbortPendingIndex,
+  adminBeginPendingIndex,
   adminFetchRepoDeleteImpact,
   adminFetchPendingRepoTree,
   adminFetchRepoFile,
   adminFetchRepoTree,
-  adminIndexRepoStream,
+  adminFinishPendingIndex,
+  adminIngestOnePending,
+  adminListPendingIngestPaths,
   adminRepoUrlHint,
   adminUpdateCell,
   adminUpdateCellSupportMarkdown,
@@ -37,7 +41,6 @@ import type {
   CellResponse,
   FolderStructureDto,
   GitConnectionMode,
-  IngestProgressEvent,
   SupportMarkdownObjectDto,
 } from "../types";
 
@@ -56,7 +59,7 @@ type IngestProgressState = {
   chunksIndexed: number;
   currentFile: string | null;
   detail: string | null;
-  /** Resumen de rutas omitidas o errores por archivo (NDJSON DONE / CELL_REPO_READY). */
+  /** Resumen de rutas omitidas o errores por archivo. */
   skippedHint: string | null;
 };
 
@@ -65,73 +68,6 @@ function summarizeSkippedPaths(skipped: string[] | undefined | null): string | n
   const max = 2;
   const head = skipped.slice(0, max).join("; ");
   return skipped.length > max ? `${head} (+${skipped.length - max} más)` : head;
-}
-
-function mergeIngestProgress(
-  prev: IngestProgressState | null,
-  ev: IngestProgressEvent,
-): IngestProgressState {
-  if (ev.phase === "START" && ev.totalFiles != null) {
-    return {
-      totalFiles: ev.totalFiles,
-      filesProcessed: 0,
-      chunksIndexed: 0,
-      currentFile: null,
-      detail:
-        ev.totalFiles === 0
-          ? "Sin archivos de texto para indexar en esta revisión (solo binarios u omitidos por tipo)."
-          : null,
-      skippedHint: null,
-    };
-  }
-  if (ev.phase === "FILE" || ev.phase === "PROGRESS") {
-    return {
-      totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
-      filesProcessed: ev.filesProcessed ?? prev?.filesProcessed ?? 0,
-      chunksIndexed: ev.chunksIndexed ?? prev?.chunksIndexed ?? 0,
-      currentFile: ev.currentFile ?? prev?.currentFile ?? null,
-      detail: ev.detail ?? prev?.detail ?? null,
-      skippedHint: prev?.skippedHint ?? null,
-    };
-  }
-  if (ev.phase === "DONE") {
-    return {
-      totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
-      filesProcessed: ev.filesProcessed ?? prev?.filesProcessed ?? 0,
-      chunksIndexed: ev.chunksIndexed ?? prev?.chunksIndexed ?? 0,
-      currentFile: ev.currentFile ?? prev?.currentFile ?? null,
-      detail: ev.detail ?? prev?.detail ?? null,
-      skippedHint: summarizeSkippedPaths(ev.skipped) ?? prev?.skippedHint ?? null,
-    };
-  }
-  if (ev.phase === "CELL_REPO_READY") {
-    const evF = ev.filesProcessed;
-    const evC = ev.chunksIndexed;
-    const prevF = prev?.filesProcessed ?? 0;
-    const prevC = prev?.chunksIndexed ?? 0;
-    const filesProcessed =
-      evF != null && evF > 0 ? evF : prevF > 0 ? prevF : evF ?? prev?.filesProcessed ?? 0;
-    const chunksIndexed =
-      evC != null && evC > 0 ? evC : prevC > 0 ? prevC : evC ?? prev?.chunksIndexed ?? 0;
-    return {
-      totalFiles: prev?.totalFiles ?? ev.totalFiles ?? 0,
-      filesProcessed,
-      chunksIndexed,
-      currentFile: null,
-      detail: ev.linkedWithoutReindex ? "Enlazado sin reindexar." : "Indexación completada.",
-      skippedHint: summarizeSkippedPaths(ev.skipped) ?? prev?.skippedHint ?? null,
-    };
-  }
-  return (
-    prev ?? {
-      totalFiles: 0,
-      filesProcessed: 0,
-      chunksIndexed: 0,
-      currentFile: null,
-      detail: null,
-      skippedHint: null,
-    }
-  );
 }
 
 function toRepoBodyFromForm(p: {
@@ -560,10 +496,70 @@ export function AdminCellEditorPage() {
       detail: null,
       skippedHint: null,
     });
+    let repoId: number | null = null;
     try {
-      const res = await adminIndexRepoStream(body, (ev) => {
-        setAddProgress((prev) => mergeIngestProgress(prev, ev));
+      const begin = await adminBeginPendingIndex(body);
+      if (begin.linkedWithoutReindex) {
+        setPendingIndexed((prev) =>
+          prev.some((p) => p.repo.id === begin.repo.id)
+            ? prev
+            : [...prev, { clientId: newId(), repo: begin.repo }],
+        );
+        setRepoUrl("");
+        setRepoLocalPath("");
+        setRepoDisplayName("");
+        setRepoNamespace("");
+        setRepoTags("");
+        setRepoToken("");
+        setHintReuse(false);
+        setRepoDefaultBranch("");
+        setShowRepoForm(false);
+        return;
+      }
+      repoId = begin.repo.id;
+      const paths = await adminListPendingIngestPaths(repoId);
+      const fileErrors: string[] = [];
+      setAddProgress({
+        totalFiles: paths.length,
+        filesProcessed: 0,
+        chunksIndexed: 0,
+        currentFile: null,
+        detail:
+          paths.length === 0
+            ? "Sin archivos de texto para indexar en esta revisión (solo binarios u omitidos por tipo)."
+            : "Obteniendo lista de archivos…",
+        skippedHint: null,
       });
+      let filesDone = 0;
+      let chunksTotal = 0;
+      for (const path of paths) {
+        const r = await adminIngestOnePending(repoId, path);
+        if (r.errorMessage) {
+          fileErrors.push(`${path}: ${r.errorMessage}`);
+        } else if (r.skipped && r.skipReason) {
+          fileErrors.push(`${path}: ${r.skipReason}`);
+        }
+        if (r.indexed) {
+          filesDone += 1;
+          chunksTotal += r.chunksIndexed;
+        }
+        const hint =
+          fileErrors.length === 0
+            ? null
+            : fileErrors.length <= 2
+              ? fileErrors.join("; ")
+              : `${fileErrors.slice(0, 2).join("; ")} (+${fileErrors.length - 2} más)`;
+        setAddProgress({
+          totalFiles: paths.length,
+          filesProcessed: filesDone,
+          chunksIndexed: chunksTotal,
+          currentFile: path,
+          detail: r.indexed ? `Fragmentos en este archivo: ${r.chunksIndexed}` : null,
+          skippedHint: hint,
+        });
+      }
+      const res = await adminFinishPendingIndex(repoId);
+      repoId = null;
       setPendingIndexed((prev) =>
         prev.some((p) => p.repo.id === res.id) ? prev : [...prev, { clientId: newId(), repo: res }],
       );
@@ -576,9 +572,23 @@ export function AdminCellEditorPage() {
       setHintReuse(false);
       setRepoDefaultBranch("");
       setShowRepoForm(false);
+      if (fileErrors.length > 0) {
+        setErr(
+          `Indexación completada con avisos (${fileErrors.length}): ${fileErrors.slice(0, 3).join("; ")}${
+            fileErrors.length > 3 ? "…" : ""
+          }`,
+        );
+      }
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
     } finally {
+      if (repoId != null) {
+        try {
+          await adminAbortPendingIndex(repoId);
+        } catch {
+          /* ignorar: sesión ya cerrada en el servidor */
+        }
+      }
       setIndexingAdd(false);
       setAddProgress(null);
     }
@@ -1633,7 +1643,7 @@ export function AdminCellEditorPage() {
             ) : (
               <textarea
                 className="admin-cell-editor__viewer-textarea"
-                readOnly={viewer.kind === "repo"}
+                readOnly
                 value={viewerDraft}
                 onChange={(ev) => setViewerDraft(ev.target.value)}
                 rows={24}

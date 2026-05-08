@@ -6,6 +6,8 @@ import type {
   CellResponse,
   CellRepoResponse,
   CellRepoUrlHint,
+  PendingIndexBeginResponse,
+  SinglePathIngestResultDto,
   GitConnectionMode,
   ChatHistoryEntry,
   ConnectResponse,
@@ -633,21 +635,22 @@ export async function adminIndexRepoStream(
     consumeLine(tail);
   }
 
-  if (!lastReady || lastReady.cellRepoId == null) {
+  const readyEvt = lastReady as IngestProgressEvent | null;
+  if (readyEvt == null || readyEvt.cellRepoId == null) {
     throw new Error("No se recibió confirmación del repositorio indexado.");
   }
-  const merged = mergeReadyAndDoneIngestCounts(lastReady, lastDone);
+  const merged = mergeReadyAndDoneIngestCounts(readyEvt, lastDone);
   return {
-    id: lastReady.cellRepoId,
+    id: readyEvt.cellRepoId,
     cellId: null,
-    displayName: lastReady.displayName ?? "",
+    displayName: readyEvt.displayName ?? "",
     repositoryUrl: body.repositoryUrl,
     connectionMode: body.connectionMode,
     gitUsername: body.gitUsername ?? null,
     hasCredential: !!(body.credentialPlain && body.credentialPlain.length > 0),
     localPath: body.localPath ?? null,
     tagsCsv: body.tagsCsv ?? null,
-    vectorNamespace: lastReady.namespace ?? null,
+    vectorNamespace: readyEvt.namespace ?? null,
     active: true,
     createdAt: null,
     updatedAt: null,
@@ -655,8 +658,68 @@ export async function adminIndexRepoStream(
     lastIngestFiles: merged.files,
     lastIngestChunks: merged.chunks,
     lastIngestSkipped: merged.skipped ?? null,
-    linkedWithoutReindex: lastReady.linkedWithoutReindex,
+    linkedWithoutReindex: readyEvt.linkedWithoutReindex,
   };
+}
+
+export async function adminBeginPendingIndex(body: CellRepoRequestBody): Promise<PendingIndexBeginResponse> {
+  const res = await fetch(`${apiBase()}/admin/cells/pending/index/begin`, {
+    method: "POST",
+    headers: {
+      ...headers(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  return parseJson<PendingIndexBeginResponse>(res);
+}
+
+export async function adminListPendingIngestPaths(repoId: number): Promise<string[]> {
+  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/ingest-paths`, {
+    headers: headers(),
+  });
+  return parseJson<string[]>(res);
+}
+
+export async function adminIngestOnePending(
+  repoId: number,
+  path: string,
+): Promise<SinglePathIngestResultDto> {
+  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/ingest-one`, {
+    method: "POST",
+    headers: {
+      ...headers(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ path }),
+  });
+  return parseJson<SinglePathIngestResultDto>(res);
+}
+
+export async function adminFinishPendingIndex(repoId: number): Promise<CellRepoResponse> {
+  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/index/finish`, {
+    method: "POST",
+    headers: headers(),
+  });
+  return parseJson<CellRepoResponse>(res);
+}
+
+export async function adminAbortPendingIndex(repoId: number): Promise<void> {
+  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/index/abort`, {
+    method: "POST",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || res.statusText;
+    try {
+      const j = JSON.parse(text) as { error?: string; message?: string };
+      msg = j.message ?? j.error ?? msg;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
 }
 
 export async function adminAssignReposToCell(cellId: number, repoIds: number[]): Promise<CellRepoResponse[]> {
