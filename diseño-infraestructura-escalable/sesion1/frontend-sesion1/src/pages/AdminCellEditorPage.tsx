@@ -77,7 +77,10 @@ function mergeIngestProgress(
       filesProcessed: 0,
       chunksIndexed: 0,
       currentFile: null,
-      detail: null,
+      detail:
+        ev.totalFiles === 0
+          ? "Sin archivos de texto para indexar en esta revisión (solo binarios u omitidos por tipo)."
+          : null,
       skippedHint: null,
     };
   }
@@ -1138,6 +1141,15 @@ export function AdminCellEditorPage() {
                         <p className="ingest-progress__lead ingest-progress__lead--bar small muted">
                           Indexando → vector…
                         </p>
+                        {addProgress.currentFile ? (
+                          <div
+                            className="ingest-progress__file ingest-progress__file--bar ingest-progress__file--primary"
+                            title={addProgress.currentFile}
+                          >
+                            <span className="muted">Archivo actual:</span>{" "}
+                            <code className="ingest-progress__file-path">{addProgress.currentFile}</code>
+                          </div>
+                        ) : null}
                         <div className="ingest-progress__stats ingest-progress__stats--bar">
                           {addProgress.totalFiles > 0 ? (
                             <>
@@ -1148,25 +1160,21 @@ export function AdminCellEditorPage() {
                               <span className="muted"> · Chunks: {addProgress.chunksIndexed}</span>
                             </>
                           ) : (
-                            <span className="muted">Preparando…</span>
+                            <span className="muted">
+                              {addProgress.detail?.trim()
+                                ? addProgress.detail
+                                : "Preparando… (si acabas de pulsar, primero se clona el repo; puede tardar sin barra de porcentaje)."}
+                            </span>
                           )}
                         </div>
-                        {addProgress.detail && (
+                        {addProgress.detail && addProgress.totalFiles > 0 ? (
                           <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
                             {addProgress.detail}
                           </div>
-                        )}
+                        ) : null}
                         {addProgress.skippedHint && (
                           <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
                             Omisiones o fallos: {addProgress.skippedHint}
-                          </div>
-                        )}
-                        {addProgress.currentFile && (
-                          <div
-                            className="ingest-progress__file ingest-progress__file--bar small muted"
-                            title={addProgress.currentFile}
-                          >
-                            {addProgress.currentFile}
                           </div>
                         )}
                         <div
