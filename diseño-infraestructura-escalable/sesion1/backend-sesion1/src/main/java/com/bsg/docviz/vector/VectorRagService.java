@@ -48,48 +48,33 @@ public class VectorRagService {
 
     private static final Logger log = LoggerFactory.getLogger(VectorRagService.class);
 
+    /** Prompt de sistema compacto; la pregunta concreta va en el mensaje user (contexto RAG + enunciado). */
     private static final String SYSTEM_PROMPT =
-            "Eres un asistente técnico. Responde usando únicamente el contexto del repositorio que se te proporciona "
-                    + "(fragmentos bajo cada [Fuente: …]).\n"
-                    + "Si en el índice aparece el mismo archivo lógico en versión de trabajo (rutas con sufijo _v1, _v2, … antes "
-                    + "de la extensión), trata esa versión como la fuente de verdad sobre el archivo original del repo, salvo que "
-                    + "el usuario cite explícitamente el original con @[repo:ruta/al/archivo].\n"
-                    + "Si la pregunta pide dependencias, versiones o listas concretas, extrae lo que aparezca literalmente "
-                    + "en ese texto (p. ej. bloques Maven/Gradle, tablas, viñetas); no sustituyas por una lista genérica "
-                    + "de Spring si el contexto ya detalla artefactos o coordenadas.\n"
-                    + "Si el contexto no contiene la información, dilo sin inventar. Responde en español de forma concisa.\n\n"
-                    + "Si el mensaje de usuario incluye la etiqueta [DocViz — requisito], debes incluir cambios de archivo en "
-                    + "un bloque ```yaml (no JSON) con la raíz \"proposals:\" como lista. Copia el esquema exacto; no inventes "
-                    + "claves ni sangría incorrecta.\n"
-                    + "path: obligatorio. Primera palabra solo REPO o LOCAL, luego '/'.\n"
-                    + "- REPO/{carpetaRaízMicro}/{ruta/archivo.ext} — archivo en el clon Git (ej. REPO/findu/docker-compose.yml).\n"
-                    + "- LOCAL/{nombreBucket}/{clave/s3/del/objeto} — el backend lee ese objeto en S3 y crea el borrador "
-                    + "versionado en el área de trabajo.\n"
-                    + "new: boolean. true solo si el archivo en REPO aún no existe (contenido inicial vacío antes de bloques).\n"
-                    + "blocks: lista de ediciones con start y end (líneas 1-based del archivo base), type en mayúsculas "
-                    + "REPLACE | NEW | DELETE, y lines: lista de strings (puede ser []).\n"
-                    + "REPLACE: sustituye líneas start..end (inclusive) por lines. DELETE: elimina ese rango (lines ignorado). "
-                    + "NEW: start debe igualar end; inserta lines en esa línea (si la línea no está vacía, el backend inserta "
-                    + "antes sin borrar la existente).\n"
-                    + "Varios bloques: coordenadas válidas sin solapar; el backend aplica de mayor end a menor.\n"
-                    + "Ejemplo mínimo:\n"
+            "Eres un asistente técnico. Usa solo la información del contexto que recibes: fragmentos del repositorio "
+                    + "(marcados con [Fuente: …]) y, si en ese bloque hay documentos de soporte, también esos.\n"
+                    + "No inventes datos que no aparezcan ahí. Responde en español, claro y breve.\n\n"
+                    + "Para la petición del usuario: primero esboza un plan corto para resolver el enunciado. "
+                    + "Si la solución requiere tocar uno o más archivos (en el repo o en soporte), después del plan incluye "
+                    + "los cambios en un único bloque ```yaml con raíz proposals: (no uses JSON de propuestas).\n\n"
+                    + "path — prefijo obligatorio:\n"
+                    + "- REPO/… → archivo del repositorio clonado (ruta relativa; el backend localiza el fichero y versiona "
+                    + "borradores como _v1, _v2… sin que pongas el sufijo en path).\n"
+                    + "- LOCAL/… → objeto de soporte en almacenamiento (bucket y clave en la ruta); el backend lo resuelve y "
+                    + "versiona igual.\n\n"
+                    + "Cada ítem: path, new (true solo si el archivo aún no existe en el repo), blocks: lista de ediciones con "
+                    + "start y end (líneas 1-based), type REPLACE | NEW | DELETE, lines (strings; [] en DELETE).\n\n"
+                    + "Ejemplo:\n"
                     + "```yaml\n"
                     + "proposals:\n"
-                    + "- path: REPO/findu/docker-compose.yml\n"
+                    + "- path: REPO/auth-service/docker-compose.yml\n"
                     + "  new: false\n"
                     + "  blocks:\n"
-                    + "  - start: 105\n"
-                    + "    end: 109\n"
+                    + "  - start: 10\n"
+                    + "    end: 12\n"
                     + "    type: REPLACE\n"
                     + "    lines:\n"
-                    + "    - \"  redis:7.0-alpine\"\n"
-                    + "    - \"  restart: always\"\n"
-                    + "```\n"
-                    + "No pongas en la respuesta JSON con changeBlocks/lineEdits para propuestas DocViz: solo este YAML. "
-                    + "No uses sufijos _vN en path (el backend versiona borradores).\n\n"
-                    + "Si el usuario pide modificar, crear o ajustar archivos del repositorio (menciones @[repo:…], compose, "
-                    + "YAML, código, quitar servicios, etc.), la respuesta debe incluir el bloque ```yaml con \"proposals:\" "
-                    + "y al menos un ítem válido; no basta con explicar en prosa.";
+                    + "    - \"  image: redis:7-alpine\"\n"
+                    + "```";
 
     private final VectorProperties props;
     private final VectorIngestService vectorIngestService;
@@ -297,11 +282,20 @@ public class VectorRagService {
      * Tokens / fragmentos de texto del modelo (streaming). Requiere {@link reactor.core.publisher.Flux} del starter reactive.
      */
     public Flux<String> streamAnswer(RagPreparedContext ctx) {
+        String user = sanitizeOpenAiUserContent(ctx.userBlock());
         return chatClient.prompt()
                 .system(SYSTEM_PROMPT)
-                .user(ctx.userBlock())
+                .user(user)
                 .stream()
                 .content();
+    }
+
+    /** OpenAI rechaza contenido con NUL (p. ej. rutas o texto corrupto en contexto RAG). */
+    private static String sanitizeOpenAiUserContent(String userBlock) {
+        if (userBlock == null || userBlock.isEmpty()) {
+            return userBlock == null ? "" : userBlock;
+        }
+        return userBlock.indexOf('\u0000') < 0 ? userBlock : userBlock.replace("\u0000", "");
     }
 
     /**
@@ -605,10 +599,8 @@ public class VectorRagService {
         if (!questionImpliesFileProposal(question)) {
             return "";
         }
-        return "\n\n[DocViz — requisito] Tras un párrafo breve, incluye OBLIGATORIAMENTE un único bloque ```yaml con raíz "
-                + "\"proposals:\" (lista de ítems con path, new, blocks). path = REPO/{micro}/ruta.ext o LOCAL/{bucket}/clave/s3. "
-                + "blocks: start, end (1-based), type REPLACE|NEW|DELETE, lines: [strings]. Sin JSON de propuestas. "
-                + "Sin este YAML la interfaz no puede guardar el borrador.";
+        return "\n\n[DocViz — requisito] Tras el plan breve, incluye un único bloque ```yaml con proposals: "
+                + "(path REPO/… o LOCAL/…, new, blocks). Sin ese YAML no se puede generar el borrador versionado.";
     }
 
     private static String formatHistoryForPrompt(List<ChatHistoryEntryDto> turns, int maxAnswerChars) {

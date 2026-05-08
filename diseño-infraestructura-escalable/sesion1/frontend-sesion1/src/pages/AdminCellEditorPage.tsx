@@ -31,6 +31,7 @@ import {
   newVectorNamespaceFromRepoName,
   parseGitRepoNameFromHttpsUrl,
 } from "../api/client";
+import { randomUuid } from "../util/randomUuid";
 import type {
   CellRepoResponse,
   CellResponse,
@@ -46,7 +47,7 @@ type PendingIndexed = {
 };
 
 function newId(): string {
-  return crypto.randomUUID();
+  return randomUuid();
 }
 
 type IngestProgressState = {
@@ -55,7 +56,16 @@ type IngestProgressState = {
   chunksIndexed: number;
   currentFile: string | null;
   detail: string | null;
+  /** Resumen de rutas omitidas o errores por archivo (NDJSON DONE / CELL_REPO_READY). */
+  skippedHint: string | null;
 };
+
+function summarizeSkippedPaths(skipped: string[] | undefined | null): string | null {
+  if (skipped == null || skipped.length === 0) return null;
+  const max = 2;
+  const head = skipped.slice(0, max).join("; ");
+  return skipped.length > max ? `${head} (+${skipped.length - max} más)` : head;
+}
 
 function mergeIngestProgress(
   prev: IngestProgressState | null,
@@ -68,27 +78,57 @@ function mergeIngestProgress(
       chunksIndexed: 0,
       currentFile: null,
       detail: null,
+      skippedHint: null,
     };
   }
-  if (ev.phase === "FILE" || ev.phase === "PROGRESS" || ev.phase === "DONE") {
+  if (ev.phase === "FILE" || ev.phase === "PROGRESS") {
     return {
       totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
       filesProcessed: ev.filesProcessed ?? prev?.filesProcessed ?? 0,
       chunksIndexed: ev.chunksIndexed ?? prev?.chunksIndexed ?? 0,
       currentFile: ev.currentFile ?? prev?.currentFile ?? null,
       detail: ev.detail ?? prev?.detail ?? null,
+      skippedHint: prev?.skippedHint ?? null,
+    };
+  }
+  if (ev.phase === "DONE") {
+    return {
+      totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
+      filesProcessed: ev.filesProcessed ?? prev?.filesProcessed ?? 0,
+      chunksIndexed: ev.chunksIndexed ?? prev?.chunksIndexed ?? 0,
+      currentFile: ev.currentFile ?? prev?.currentFile ?? null,
+      detail: ev.detail ?? prev?.detail ?? null,
+      skippedHint: summarizeSkippedPaths(ev.skipped) ?? prev?.skippedHint ?? null,
     };
   }
   if (ev.phase === "CELL_REPO_READY") {
+    const evF = ev.filesProcessed;
+    const evC = ev.chunksIndexed;
+    const prevF = prev?.filesProcessed ?? 0;
+    const prevC = prev?.chunksIndexed ?? 0;
+    const filesProcessed =
+      evF != null && evF > 0 ? evF : prevF > 0 ? prevF : evF ?? prev?.filesProcessed ?? 0;
+    const chunksIndexed =
+      evC != null && evC > 0 ? evC : prevC > 0 ? prevC : evC ?? prev?.chunksIndexed ?? 0;
     return {
-      totalFiles: prev?.totalFiles ?? 0,
-      filesProcessed: ev.filesProcessed ?? prev?.filesProcessed ?? 0,
-      chunksIndexed: ev.chunksIndexed ?? prev?.chunksIndexed ?? 0,
+      totalFiles: prev?.totalFiles ?? ev.totalFiles ?? 0,
+      filesProcessed,
+      chunksIndexed,
       currentFile: null,
       detail: ev.linkedWithoutReindex ? "Enlazado sin reindexar." : "Indexación completada.",
+      skippedHint: summarizeSkippedPaths(ev.skipped) ?? prev?.skippedHint ?? null,
     };
   }
-  return prev ?? { totalFiles: 0, filesProcessed: 0, chunksIndexed: 0, currentFile: null, detail: null };
+  return (
+    prev ?? {
+      totalFiles: 0,
+      filesProcessed: 0,
+      chunksIndexed: 0,
+      currentFile: null,
+      detail: null,
+      skippedHint: null,
+    }
+  );
 }
 
 function toRepoBodyFromForm(p: {
@@ -281,6 +321,11 @@ export function AdminCellEditorPage() {
   }, [supportRows, supportFilterRepoId, supportFilterHu, supportFilterFile]);
 
   const effectiveCellId = !isNew && loadedCell ? loadedCell.id : null;
+  /** Repo indexado en esta sesión pero aún no asignado a la célula en BD → rutas `/pending/*`. */
+  const repoIdIsPending = useCallback(
+    (repoId: number) => pendingIndexed.some((p) => p.repo.id === repoId),
+    [pendingIndexed],
+  );
   const hasRepos = reposCombined.length > 0;
   const soporteTitle = (cellName.trim() || loadedCell?.name || "…").trim();
 
@@ -384,10 +429,11 @@ export function AdminCellEditorPage() {
       setExplorerLoading(true);
       setExplorerTree(null);
       try {
-        const tree =
-          effectiveCellId != null
-            ? await adminFetchRepoTree(effectiveCellId, explorerRepoId)
-            : await adminFetchPendingRepoTree(explorerRepoId);
+        const usePendingTree =
+          repoIdIsPending(explorerRepoId) || effectiveCellId == null;
+        const tree = usePendingTree
+          ? await adminFetchPendingRepoTree(explorerRepoId)
+          : await adminFetchRepoTree(effectiveCellId!, explorerRepoId);
         if (!cancelled) setExplorerTree(tree);
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
@@ -398,7 +444,7 @@ export function AdminCellEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [explorerRepoId, effectiveCellId]);
+  }, [explorerRepoId, effectiveCellId, repoIdIsPending]);
 
   const refreshRepoHint = useCallback(
     async (url: string, localPath: string, mode: GitConnectionMode) => {
@@ -509,6 +555,7 @@ export function AdminCellEditorPage() {
       chunksIndexed: 0,
       currentFile: null,
       detail: null,
+      skippedHint: null,
     });
     try {
       const res = await adminIndexRepoStream(body, (ev) => {
@@ -578,10 +625,11 @@ export function AdminCellEditorPage() {
     setViewerLoading(true);
     setErr(null);
     try {
-      const fc =
-        effectiveCellId != null
-          ? await adminFetchRepoFile(effectiveCellId, explorerRepoId, relPath)
-          : await adminFetchPendingRepoFile(explorerRepoId, relPath);
+      const usePendingFile =
+        repoIdIsPending(explorerRepoId) || effectiveCellId == null;
+      const fc = usePendingFile
+        ? await adminFetchPendingRepoFile(explorerRepoId, relPath)
+        : await adminFetchRepoFile(effectiveCellId!, explorerRepoId, relPath);
       setViewer({ kind: "repo", path: relPath, content: fc.content ?? "", repoId: explorerRepoId });
       setViewerDraft(fc.content ?? "");
     } catch (ex) {
@@ -610,7 +658,7 @@ export function AdminCellEditorPage() {
     setViewerSaving(true);
     setErr(null);
     try {
-      if (effectiveCellId != null) {
+      if (effectiveCellId != null && !repoIdIsPending(viewer.repoId)) {
         await adminUpdateCellSupportMarkdown(effectiveCellId, viewer.repoId, viewer.fileName, viewerDraft);
       } else {
         await adminUpdatePendingSupportMarkdown(viewer.repoId, viewer.fileName, viewerDraft);
@@ -629,7 +677,7 @@ export function AdminCellEditorPage() {
     if (!window.confirm(`¿Eliminar el soporte «${label}» y su indexación?`)) return;
     setErr(null);
     try {
-      if (effectiveCellId != null) {
+      if (effectiveCellId != null && !repoIdIsPending(row.repoId)) {
         await adminDeleteCellSupportMarkdown(effectiveCellId, row.repoId, row.obj.fileName);
       } else {
         await adminDeletePendingSupportMarkdown(row.repoId, row.obj.fileName);
@@ -652,7 +700,7 @@ export function AdminCellEditorPage() {
     setSupportSaving(true);
     setErr(null);
     try {
-      if (effectiveCellId != null) {
+      if (effectiveCellId != null && !repoIdIsPending(supRepoId)) {
         await adminUploadCellSupportMarkdown(effectiveCellId, supRepoId, supFile, supHuCode.trim(), supHuTitle.trim());
       } else {
         await adminUploadPendingSupportMarkdown(supRepoId, supFile, supHuCode.trim(), supHuTitle.trim());
@@ -910,6 +958,15 @@ export function AdminCellEditorPage() {
                               · {r.lastIngestFiles ?? 0} arch., {r.lastIngestChunks ?? 0} frag.
                             </span>
                           )}
+                          {r.lastIngestSkipped != null && r.lastIngestSkipped.length > 0 && (
+                            <span
+                              className="muted small"
+                              title={r.lastIngestSkipped.join("\n")}
+                            >
+                              {" "}
+                              · omitidos: {summarizeSkippedPaths(r.lastIngestSkipped)}
+                            </span>
+                          )}
                         </span>
                         <button
                           type="button"
@@ -934,6 +991,18 @@ export function AdminCellEditorPage() {
                           <strong>{p.repo.displayName}</strong>{" "}
                           <span className="muted small">
                             {p.repo.connectionMode} · {p.repo.vectorNamespace ?? ""}
+                            {p.repo.lastIngestFiles != null && (
+                              <>
+                                {" "}
+                                · {p.repo.lastIngestFiles} arch., {p.repo.lastIngestChunks ?? 0} frag.
+                              </>
+                            )}
+                            {p.repo.lastIngestSkipped != null && p.repo.lastIngestSkipped.length > 0 && (
+                              <>
+                                {" "}
+                                · omitidos: {summarizeSkippedPaths(p.repo.lastIngestSkipped)}
+                              </>
+                            )}
                             <span className="muted"> · pendiente de guardar</span>
                           </span>
                         </span>
@@ -1085,6 +1154,11 @@ export function AdminCellEditorPage() {
                         {addProgress.detail && (
                           <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
                             {addProgress.detail}
+                          </div>
+                        )}
+                        {addProgress.skippedHint && (
+                          <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
+                            Omisiones o fallos: {addProgress.skippedHint}
                           </div>
                         )}
                         {addProgress.currentFile && (

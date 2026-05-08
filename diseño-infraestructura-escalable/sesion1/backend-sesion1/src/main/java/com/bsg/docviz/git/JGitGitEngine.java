@@ -2,6 +2,7 @@ package com.bsg.docviz.git;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.Repository;
@@ -14,6 +15,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
@@ -36,7 +38,8 @@ public class JGitGitEngine implements GitEngine {
                     .setURI(cloneUrl)
                     .setDirectory(targetDir.toFile())
                     .setNoCheckout(true)
-                    .setCloneSubmodules(false)
+                    // Sin esto, los servicios en submódulos (p. ej. autenticacionservice/) no aparecen en el tree → 0 .java indexables.
+                    .setCloneSubmodules(true)
                     .call()
                     .close();
         } catch (GitAPIException e) {
@@ -88,25 +91,167 @@ public class JGitGitEngine implements GitEngine {
                     treeWalk.addTree(commit.getTree());
                     treeWalk.setRecursive(true);
                     while (treeWalk.next()) {
-                        paths.add(treeWalk.getPathString());
+                        String p = treeWalk.getPathString();
+                        if (FileMode.GITLINK.equals(treeWalk.getFileMode(0))) {
+                            Path subRoot = repoRoot.resolve(p);
+                            if (isNestedGitWorkTree(subRoot)) {
+                                try {
+                                    String subRev = resolveListingRevision(subRoot);
+                                    for (String inner : listTrackedFilePaths(subRoot, subRev)) {
+                                        paths.add(p + "/" + inner);
+                                    }
+                                } catch (IOException ex) {
+                                    // Submódulo sin checkout o sin HEAD: no bloquear listado del padre
+                                    paths.add(p);
+                                }
+                            } else {
+                                paths.add(p);
+                            }
+                        } else {
+                            paths.add(p);
+                        }
                     }
                 }
             }
-            return paths;
+            return expandTopLevelSubmoduleFolders(repoRoot, paths);
         }
+    }
+
+    /**
+     * Si el árbol del padre solo incluye el nombre del submódulo (gitlink) o TreeWalk no descendió, expande
+     * carpetas de primer nivel que sean repositorios Git anidados.
+     */
+    private List<String> expandTopLevelSubmoduleFolders(Path repoRoot, List<String> paths) throws IOException {
+        LinkedHashSet<String> merged = new LinkedHashSet<>(paths);
+        for (String p : paths) {
+            if (p == null || p.isBlank() || p.contains("/")) {
+                continue;
+            }
+            Path sub = repoRoot.resolve(p);
+            if (!isNestedGitWorkTree(sub)) {
+                continue;
+            }
+            boolean hasNestedListed = paths.stream().anyMatch(x -> !x.equals(p) && x.startsWith(p + "/"));
+            if (hasNestedListed) {
+                merged.remove(p);
+                continue;
+            }
+            try {
+                String subRev = resolveListingRevision(sub);
+                List<String> inner = listTrackedFilePaths(sub, subRev);
+                if (!inner.isEmpty()) {
+                    merged.remove(p);
+                    for (String in : inner) {
+                        merged.add(p + "/" + in);
+                    }
+                }
+            } catch (IOException ignored) {
+                // mantener entrada p
+            }
+        }
+        return new ArrayList<>(merged);
+    }
+
+    private static boolean isNestedGitWorkTree(Path dir) {
+        if (dir == null || !Files.isDirectory(dir)) {
+            return false;
+        }
+        Path dotGit = dir.resolve(".git");
+        return Files.exists(dotGit);
+    }
+
+    /**
+     * Raíz del repo donde vive el blob, revisión efectiva y ruta relativa dentro de ese repo
+     * (tras cruzar prefijos de submódulo).
+     */
+    private record ResolvedBlob(Path root, String revision, String pathInRepo) {}
+
+    private static String normalizeEnginePath(String repoRelativePath) {
+        if (repoRelativePath == null || repoRelativePath.isBlank()) {
+            throw new IllegalArgumentException("path required");
+        }
+        String p = repoRelativePath.replace('\\', '/').trim();
+        if (p.startsWith("/")) {
+            p = p.substring(1);
+        }
+        if (p.contains("..")) {
+            throw new IllegalArgumentException("invalid path");
+        }
+        return p;
+    }
+
+    private static ObjectLoader tryBlobAt(Repository repo, RevCommit commit, String rel) throws IOException {
+        try (TreeWalk tw = TreeWalk.forPath(repo, rel, commit.getTree())) {
+            if (tw == null) {
+                return null;
+            }
+            FileMode mode = tw.getFileMode(0);
+            if (FileMode.GITLINK.equals(mode) || FileMode.TREE.equals(mode)) {
+                return null;
+            }
+            return repo.open(tw.getObjectId(0));
+        }
+    }
+
+    private static ObjectId submoduleCommitAt(Repository parent, RevCommit parentCommit, String submodulePath)
+            throws IOException {
+        try (TreeWalk tw = TreeWalk.forPath(parent, submodulePath, parentCommit.getTree())) {
+            if (tw == null || !FileMode.GITLINK.equals(tw.getFileMode(0))) {
+                return null;
+            }
+            return tw.getObjectId(0);
+        }
+    }
+
+    /**
+     * Rutas listadas como {@code submódulo/ruta} viven en el árbol del sub-repositorio, no en el commit del padre.
+     */
+    private ResolvedBlob resolveForBlobOps(Path repoRoot, String revisionSpec, String repoRelativePath)
+            throws IOException {
+        String path = normalizeEnginePath(repoRelativePath);
+        try (Git git = Git.open(repoRoot.toFile())) {
+            Repository repository = git.getRepository();
+            ObjectId commitId = repository.resolve(revisionSpec);
+            if (commitId == null) {
+                throw new IOException("Unknown revision: " + revisionSpec);
+            }
+            try (RevWalk rw = new RevWalk(repository)) {
+                RevCommit commit = rw.parseCommit(commitId);
+                if (tryBlobAt(repository, commit, path) != null) {
+                    return new ResolvedBlob(repoRoot, revisionSpec, path);
+                }
+                for (int slash = path.indexOf('/'); slash > 0; slash = path.indexOf('/', slash + 1)) {
+                    String prefix = path.substring(0, slash);
+                    String suffix = path.substring(slash + 1);
+                    if (suffix.isEmpty()) {
+                        continue;
+                    }
+                    Path nestedRoot = repoRoot.resolve(prefix);
+                    if (!isNestedGitWorkTree(nestedRoot)) {
+                        continue;
+                    }
+                    ObjectId gitlink = submoduleCommitAt(repository, commit, prefix);
+                    String innerRev = gitlink != null ? gitlink.name() : resolveListingRevision(nestedRoot);
+                    return resolveForBlobOps(nestedRoot, innerRev, suffix);
+                }
+            }
+        }
+        throw new IOException("Path not in tree: " + path);
     }
 
     @Override
     public long blobSizeBytes(Path repoRoot, String revisionSpec, String repoRelativePath) throws IOException {
-        try (Git git = Git.open(repoRoot.toFile())) {
-            return openBlobLoader(git.getRepository(), revisionSpec, repoRelativePath).getSize();
+        ResolvedBlob r = resolveForBlobOps(repoRoot, revisionSpec, repoRelativePath);
+        try (Git git = Git.open(r.root().toFile())) {
+            return openBlobLoader(git.getRepository(), r.revision(), r.pathInRepo()).getSize();
         }
     }
 
     @Override
     public void checkoutPath(Path repoRoot, String revisionSpec, String repoRelativePath) throws IOException {
-        try (Git git = Git.open(repoRoot.toFile())) {
-            git.checkout().setStartPoint(revisionSpec).addPath(repoRelativePath).call();
+        ResolvedBlob r = resolveForBlobOps(repoRoot, revisionSpec, repoRelativePath);
+        try (Git git = Git.open(r.root().toFile())) {
+            git.checkout().setStartPoint(r.revision()).addPath(r.pathInRepo()).call();
         } catch (GitAPIException e) {
             throw new IOException("git checkout failed: " + e.getMessage(), e);
         }
@@ -114,8 +259,9 @@ public class JGitGitEngine implements GitEngine {
 
     @Override
     public byte[] readBlob(Path repoRoot, String revisionSpec, String repoRelativePath) throws IOException {
-        try (Git git = Git.open(repoRoot.toFile())) {
-            return openBlobLoader(git.getRepository(), revisionSpec, repoRelativePath).getBytes();
+        ResolvedBlob r = resolveForBlobOps(repoRoot, revisionSpec, repoRelativePath);
+        try (Git git = Git.open(r.root().toFile())) {
+            return openBlobLoader(git.getRepository(), r.revision(), r.pathInRepo()).getBytes();
         }
     }
 

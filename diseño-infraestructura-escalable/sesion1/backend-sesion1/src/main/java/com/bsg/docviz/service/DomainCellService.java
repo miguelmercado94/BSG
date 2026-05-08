@@ -22,6 +22,7 @@ import com.bsg.docviz.support.SupportS3Service;
 import com.bsg.docviz.security.CurrentUser;
 import com.bsg.docviz.util.RemoteHeadBranchResolver;
 import com.bsg.docviz.util.RepositoryUrlNormalizer;
+import com.bsg.docviz.dto.VectorIngestResponse;
 import com.bsg.docviz.vector.VectorIngestService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -310,18 +311,20 @@ public class DomainCellService {
                                 blankToNull(req.tagsCsv()),
                                 vectorNs,
                                 repoKey);
+                VectorIngestResponse ingestResult = null;
                 try {
                     GitConnectRequest g = buildGitConnectFromRequest(req);
+                    g.setVectorNamespace(vectorNs);
                     gitRepositoryService.connect(g);
-                    var ingest = vectorIngestService.ingestAll(onProgress, vectorNs);
+                    ingestResult = vectorIngestService.ingestAll(onProgress, vectorNs);
                     String skippedJson =
                             objectMapper.writeValueAsString(
-                                    ingest.getSkipped() != null ? ingest.getSkipped() : List.of());
+                                    ingestResult.getSkipped() != null ? ingestResult.getSkipped() : List.of());
                     cellRepoRepository.updateLastIngest(
                             id,
                             Instant.now(),
-                            ingest.getFilesProcessed(),
-                            ingest.getChunksIndexed(),
+                            ingestResult.getFilesProcessed(),
+                            ingestResult.getChunksIndexed(),
                             skippedJson);
                 } catch (ResponseStatusException e) {
                     cellRepoRepository.delete(id);
@@ -335,7 +338,7 @@ public class DomainCellService {
                 }
                 CellRepoResponse result = cellRepoRepository.findById(id).map(this::toRepoDto).orElseThrow();
                 if (onProgress != null) {
-                    onProgress.accept(IngestProgressDto.cellRepoReady(result));
+                    onProgress.accept(IngestProgressDto.cellRepoReady(result, ingestResult));
                 }
                 return result;
             } finally {
@@ -430,18 +433,20 @@ public class DomainCellService {
                                 blankToNull(req.tagsCsv()),
                                 vectorNs,
                                 repoKey);
+                VectorIngestResponse ingestResult = null;
                 try {
                     GitConnectRequest g = buildGitConnectFromRequest(req);
+                    g.setVectorNamespace(vectorNs);
                     gitRepositoryService.connect(g);
-                    var ingest = vectorIngestService.ingestAll(onProgress, vectorNs);
+                    ingestResult = vectorIngestService.ingestAll(onProgress, vectorNs);
                     String skippedJson =
                             objectMapper.writeValueAsString(
-                                    ingest.getSkipped() != null ? ingest.getSkipped() : List.of());
+                                    ingestResult.getSkipped() != null ? ingestResult.getSkipped() : List.of());
                     cellRepoRepository.updateLastIngest(
                             id,
                             Instant.now(),
-                            ingest.getFilesProcessed(),
-                            ingest.getChunksIndexed(),
+                            ingestResult.getFilesProcessed(),
+                            ingestResult.getChunksIndexed(),
                             skippedJson);
                 } catch (ResponseStatusException e) {
                     cellRepoRepository.delete(id);
@@ -455,7 +460,7 @@ public class DomainCellService {
                 }
                 CellRepoResponse result = cellRepoRepository.findById(id).map(this::toRepoDto).orElseThrow();
                 if (onProgress != null) {
-                    onProgress.accept(IngestProgressDto.cellRepoReady(result));
+                    onProgress.accept(IngestProgressDto.cellRepoReady(result, ingestResult));
                 }
                 return result;
             } finally {

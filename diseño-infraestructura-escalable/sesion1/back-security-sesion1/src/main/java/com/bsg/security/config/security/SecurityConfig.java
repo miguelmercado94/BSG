@@ -5,6 +5,7 @@ import com.bsg.security.exception.JsonAccessDeniedHandler;
 import com.bsg.security.exception.JsonAuthenticationEntryPoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authorization.ReactiveAuthorizationManager;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
@@ -31,6 +32,8 @@ public class SecurityConfig {
                         .accessDeniedHandler(accessDeniedHandler)
                 )
                 .authorizeExchange(exchanges -> exchanges
+                        // CORS preflight must be unauthenticated and return 2xx.
+                        .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .pathMatchers("/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**").permitAll()
                         .anyExchange().access(authorizationManager)
                 )

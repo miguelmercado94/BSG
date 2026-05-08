@@ -161,6 +161,24 @@ public class WorkAreaDraftController {
     }
 
     /**
+     * Actualiza el cuerpo de un objeto en el bucket borradores (sin reindexar). Para borradores listados solo-S3 con
+     * conflictos DocViz resueltos en la SPA.
+     */
+    @PostMapping("/s3-borrador-save")
+    public ResponseEntity<Map<String, Boolean>> saveBorradorS3(@Valid @RequestBody WorkAreaS3WorkareaSaveRequest body) {
+        String taskHu = DocvizTaskContext.taskLabelOrNull();
+        if (taskHu == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Falta cabecera " + DocvizUserFilter.TASK_HU_HEADER);
+        }
+        if (!workAreaS3ArtifactService.isS3Configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "S3 no configurado");
+        }
+        workAreaS3ArtifactService.updateBorradorObjectContent(
+                CurrentUser.require(), taskHu, body.getObjectKey(), body.getContent());
+        return ResponseEntity.ok(Map.of("saved", Boolean.TRUE));
+    }
+
+    /**
      * Restaura borradores y archivos workarea desde S3 al clon (cabeceras {@code X-DocViz-Task-Hu} y opcionalmente
      * {@code X-DocViz-Cell} como en el resto del área de trabajo).
      */

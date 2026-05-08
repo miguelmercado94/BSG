@@ -190,7 +190,7 @@ services:
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-sesion-bsg}
       FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-/run/secrets/firebase-adminsdk.json}
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/run/secrets/firebase-adminsdk.json}
-      # Gemini en la misma imagen: SPRING_PROFILES_ACTIVE=develop + GEMINI_API_KEY (ver application-develop.properties).
+      # Develop/pdn en la misma imagen: GROQ_API_KEY + OPENAI_API_KEY para embeddings (ver application-develop.properties).
     depends_on:
       ollama:
         condition: service_started
@@ -216,6 +216,7 @@ services:
     environment:
       BACKEND_URL: ${FRONTEND_BACKEND_URL:-}
       SECURITY_URL: ${FRONTEND_SECURITY_URL:-}
+      NGINX_RESOLVER: ${NGINX_RESOLVER:-127.0.0.11}
     ports:
       - "3000:80"
     depends_on:

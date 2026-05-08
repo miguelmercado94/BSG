@@ -1,6 +1,6 @@
 # backend-sesion1 (DocViz API)
 
-Backend **Spring Boot** del proyecto DocViz — Sesión 1: Git/workspaces, chat RAG, área de trabajo S3, vector store (pgvector / Pinecone según configuración), integración con **Ollama** o **Gemini** según `SPRING_PROFILES_ACTIVE` en runtime (mismo JAR / imagen Docker).
+Backend **Spring Boot** del proyecto DocViz — Sesión 1: Git/workspaces, chat RAG, área de trabajo S3, vector store (pgvector / Pinecone según configuración). Perfil **local**: **Ollama**. Perfiles **develop/pdn**: chat **Groq** + embeddings **OpenAI** (Spring AI; mismo JAR / imagen Docker).
 
 ---
 

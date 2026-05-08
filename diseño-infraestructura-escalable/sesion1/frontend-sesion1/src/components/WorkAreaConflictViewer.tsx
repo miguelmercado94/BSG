@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   buildResolvedDocvizMerge,
@@ -23,6 +23,10 @@ type Props = {
 export function WorkAreaConflictViewer({ text, onResolvedChange }: Props) {
   const parsed = useMemo(() => parseDocvizMerge(text), [text]);
   const [choice, setChoice] = useState<Choice>("theirs");
+  /** Evita resetear la elección del usuario en cada re-render si el contenido es el mismo valor. */
+  const prevMarkersBlobRef = useRef<string | null>(null);
+
+  const resolvedPreview = useMemo(() => buildResolvedDocvizMerge(text, choice), [text, choice]);
 
   const applyChoice = useCallback(
     (c: Choice) => {
@@ -33,12 +37,17 @@ export function WorkAreaConflictViewer({ text, onResolvedChange }: Props) {
   );
 
   useEffect(() => {
-    if (hasDocvizMergeMarkers(text)) {
-      onResolvedChange(buildResolvedDocvizMerge(text, "theirs"));
-      setChoice("theirs");
-    } else {
+    if (!hasDocvizMergeMarkers(text)) {
+      prevMarkersBlobRef.current = null;
       onResolvedChange(text);
+      return;
     }
+    if (prevMarkersBlobRef.current === text) {
+      return;
+    }
+    prevMarkersBlobRef.current = text;
+    setChoice("theirs");
+    onResolvedChange(buildResolvedDocvizMerge(text, "theirs"));
   }, [text, onResolvedChange]);
 
   if (!parsed) {
@@ -80,6 +89,14 @@ export function WorkAreaConflictViewer({ text, onResolvedChange }: Props) {
           Aceptar ambos
         </button>
       </div>
+
+      <div className="work-area-conflict__preview-hint muted small" role="status">
+        Texto que se usará al guardar o descargar (cambia al pulsar arriba). Luego usa «Editar» en la barra para afinar y
+        guardar.
+      </div>
+      <pre className="work-area-conflict__preview-body" spellCheck={false}>
+        {resolvedPreview}
+      </pre>
 
       <div className="work-area-conflict__marker work-area-conflict__marker--start">{MARKER_OURS}</div>
       <pre className="work-area-conflict__block work-area-conflict__block--ours" spellCheck={false}>

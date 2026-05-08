@@ -1,3 +1,5 @@
+import { randomUuid } from "../util/randomUuid";
+
 import type {
   CellRepoRequestBody,
   CellRequestBody,
@@ -20,6 +22,7 @@ import type {
   TaskCreateRequest,
   TaskResponse,
   WorkAreaS3ObjectDto,
+  RagChatTurnResponse,
   VectorChatResponse,
   VectorClearResponse,
   VectorIngestResponse,
@@ -52,6 +55,29 @@ export function setUserId(id: string): void {
 
 export function clearUserId(): void {
   localStorage.removeItem(storedKey);
+}
+
+/**
+ * Si CELL_REPO_READY llega con archivos/chunks en 0 pero hubo un DONE previo en el mismo stream,
+ * conservar los conteos del DONE (p. ej. lectura BD desfasada o proxy que agrupa líneas NDJSON).
+ */
+function mergeReadyAndDoneIngestCounts(
+  lastReady: IngestProgressEvent,
+  lastDone: IngestProgressEvent | null,
+): { files: number | null; chunks: number | null; skipped: string[] | undefined | null } {
+  const rf = lastReady.filesProcessed;
+  const rc = lastReady.chunksIndexed;
+  const df = lastDone?.filesProcessed;
+  const dc = lastDone?.chunksIndexed;
+  const files =
+    rf != null && rf > 0 ? rf : df != null && df > 0 ? df : rf ?? df ?? null;
+  const chunks =
+    rc != null && rc > 0 ? rc : dc != null && dc > 0 ? dc : rc ?? dc ?? null;
+  const skipped =
+    lastReady.skipped != null && lastReady.skipped.length > 0
+      ? lastReady.skipped
+      : lastDone?.skipped ?? null;
+  return { files, chunks, skipped };
 }
 
 function parseJwtRole(jwt: string): string {
@@ -572,6 +598,7 @@ export async function adminIndexRepoStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let lastReady: IngestProgressEvent | null = null;
+  let lastDone: IngestProgressEvent | null = null;
 
   function consumeLine(trimmed: string): void {
     if (!trimmed) return;
@@ -579,6 +606,9 @@ export async function adminIndexRepoStream(
     onProgress(ev);
     if (ev.phase === "ERROR") {
       throw new Error(ev.error ?? "Error al indexar el repositorio");
+    }
+    if (ev.phase === "DONE") {
+      lastDone = ev;
     }
     if (ev.phase === "CELL_REPO_READY") {
       lastReady = ev;
@@ -606,6 +636,7 @@ export async function adminIndexRepoStream(
   if (!lastReady || lastReady.cellRepoId == null) {
     throw new Error("No se recibió confirmación del repositorio indexado.");
   }
+  const merged = mergeReadyAndDoneIngestCounts(lastReady, lastDone);
   return {
     id: lastReady.cellRepoId,
     cellId: null,
@@ -621,9 +652,9 @@ export async function adminIndexRepoStream(
     createdAt: null,
     updatedAt: null,
     lastIngestAt: null,
-    lastIngestFiles: lastReady.filesProcessed ?? null,
-    lastIngestChunks: lastReady.chunksIndexed ?? null,
-    lastIngestSkipped: null,
+    lastIngestFiles: merged.files,
+    lastIngestChunks: merged.chunks,
+    lastIngestSkipped: merged.skipped ?? null,
     linkedWithoutReindex: lastReady.linkedWithoutReindex,
   };
 }
@@ -838,7 +869,7 @@ export function parseGitRepoNameFromHttpsUrl(url: string): string | null {
 
 /** Namespace tipo `nombre-uuid` (alineado con el backend). */
 export function newVectorNamespaceFromRepoName(name: string): string {
-  const u = crypto.randomUUID();
+  const u = randomUuid();
   const safe = name.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_+/g, "_").slice(0, 200) || "repo";
   return `${safe}-${u}`.slice(0, 500);
 }
@@ -982,6 +1013,26 @@ export async function saveWorkAreaS3WorkareaAndReindex(
     signal: init?.signal,
   });
   return parseJson<VectorIngestResponse>(res);
+}
+
+/** POST /vector/work-area/s3-borrador-save — objeto en bucket borradores (sin reindexar). */
+export async function saveWorkAreaS3BorradorContent(
+  body: { objectKey: string; content: string },
+  init?: WorkAreaRequestInit,
+): Promise<void> {
+  const res = await fetch(`${apiBase()}/vector/work-area/s3-borrador-save`, {
+    method: "POST",
+    headers: {
+      ...headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: init?.signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
 }
 
 export async function restoreWorkAreaFromS3(init?: WorkAreaRequestInit): Promise<TaskArtifactRestoreResponse> {
@@ -1267,36 +1318,13 @@ export async function vectorChat(question: string): Promise<VectorChatResponse> 
   return parseJson<VectorChatResponse>(res);
 }
 
-/** URL del WebSocket de chat RAG en streaming (misma base que el API; Vite reescribe /api → backend). */
-export function wsRagChatUrl(): string {
-  const base = apiBase();
-  if (base.startsWith("/")) {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}${base}/ws/rag-chat`;
-  }
-  if (base.startsWith("https://")) {
-    return `${base.replace(/^https/i, "wss")}/ws/rag-chat`;
-  }
-  if (base.startsWith("http://")) {
-    return `${base.replace(/^http/i, "ws")}/ws/rag-chat`;
-  }
-  throw new Error("VITE_API_URL no es válida para WebSocket.");
-}
-
-type WsRagPayload =
-  | { type: "start"; sources: string[] }
-  | { type: "delta"; text: string }
-  | { type: "proposals"; proposals: WorkAreaFileProposal[] }
-  | { type: "done" }
-  | { type: "error"; message: string };
-
-/** Red de seguridad: el servidor puede tardar (análisis en pasos + una pasada por paso). */
-const WS_RAG_CHAT_HARD_TIMEOUT_MS = 120 * 60 * 1000;
+const REST_RAG_DELTA_CHUNK = 480;
 
 /**
- * Chat RAG en vivo: el modelo envía fragmentos (delta) como ChatGPT.
+ * Chat RAG vía POST {@code /vector/chat/rag-turn}. El historial se alinea con HU / {@code conversationId} / tarea / célula.
+ * La respuesta llega completa; el cliente trocea el texto para mantener la sensación de escritura progresiva.
  */
-export function streamVectorChat(
+export async function streamVectorChat(
   question: string,
   handlers: {
     onStart: (sources: string[]) => void;
@@ -1304,96 +1332,36 @@ export function streamVectorChat(
     /** Tras los deltas, el servidor puede enviar propuestas de área de trabajo (JSON parseado). */
     onProposals?: (proposals: WorkAreaFileProposal[]) => void;
   },
-  /** Opcional: HU, id de tarea (hilo principal = menor N en servidor) y/o conversación explícita. */
+  /** Opcional: código HU, id de tarea (hilo principal en servidor), conversación explícita, célula. */
   options?: { taskHuCode?: string; conversationId?: string; taskId?: number; cellName?: string },
 ): Promise<void> {
   const uid = getUserId();
   if (!uid) {
     return Promise.reject(new Error("Falta el identificador de usuario (DocViz)."));
   }
-  return new Promise((resolve, reject) => {
-    let url: string;
-    try {
-      url = wsRagChatUrl();
-    } catch (e) {
-      reject(e instanceof Error ? e : new Error(String(e)));
-      return;
-    }
-    const ws = new WebSocket(url);
-    let settled = false;
-    let hardTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    const clearHardTimeout = () => {
-      if (hardTimeoutId !== undefined) {
-        clearTimeout(hardTimeoutId);
-        hardTimeoutId = undefined;
-      }
-    };
-    const doneOk = () => {
-      if (!settled) {
-        settled = true;
-        clearHardTimeout();
-        resolve();
-      }
-    };
-    const doneErr = (err: Error) => {
-      if (!settled) {
-        settled = true;
-        clearHardTimeout();
-        reject(err);
-      }
-    };
-    ws.onopen = () => {
-      const hardMs = WS_RAG_CHAT_HARD_TIMEOUT_MS;
-      hardTimeoutId = setTimeout(() => {
-        doneErr(
-          new Error(
-            "Tiempo de espera agotado (chat RAG). Prueba «Reconectar» o vuelve a enviar la pregunta.",
-          ),
-        );
-        try {
-          ws.close();
-        } catch {
-          /* ignore */
-        }
-      }, hardMs);
-      const payload: Record<string, unknown> = { question, user: uid, role: getDocVizRole() };
-      if (options?.taskHuCode?.trim()) payload.taskHuCode = options.taskHuCode.trim();
-      if (options?.conversationId?.trim()) payload.conversationId = options.conversationId.trim();
-      if (options?.taskId != null && Number.isFinite(options.taskId) && options.taskId > 0) {
-        payload.taskId = Math.trunc(options.taskId);
-      }
-      if (options?.cellName?.trim()) payload.cellName = options.cellName.trim();
-      ws.send(JSON.stringify(payload));
-    };
-    ws.onmessage = (ev) => {
-      let msg: WsRagPayload;
-      try {
-        msg = JSON.parse(ev.data as string) as WsRagPayload;
-      } catch {
-        doneErr(new Error("Respuesta WebSocket inválida"));
-        ws.close();
-        return;
-      }
-      if (msg.type === "start") handlers.onStart(msg.sources ?? []);
-      if (msg.type === "delta") handlers.onDelta(msg.text ?? "");
-      if (msg.type === "proposals" && handlers.onProposals) {
-        const list = (msg as { proposals?: WorkAreaFileProposal[] }).proposals;
-        if (list && list.length > 0) handlers.onProposals(list);
-      }
-      if (msg.type === "done") {
-        doneOk();
-        ws.close();
-      }
-      if (msg.type === "error") {
-        ws.close();
-        doneErr(new Error(msg.message ?? "Error en el chat"));
-      }
-    };
-    ws.onerror = () => doneErr(new Error("Error de red (WebSocket)"));
-    ws.onclose = () => {
-      if (!settled) doneErr(new Error("Conexión cerrada antes de terminar la respuesta"));
-    };
+
+  const body: Record<string, unknown> = { question };
+  if (options?.taskHuCode?.trim()) body.taskHuCode = options.taskHuCode.trim();
+  if (options?.conversationId?.trim()) body.conversationId = options.conversationId.trim();
+  if (options?.taskId != null && Number.isFinite(options.taskId) && options.taskId > 0) {
+    body.taskId = Math.trunc(options.taskId);
+  }
+  if (options?.cellName?.trim()) body.cellName = options.cellName.trim();
+
+  const res = await fetch(`${apiBase()}/vector/chat/rag-turn`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
   });
+  const data = await parseJson<RagChatTurnResponse>(res);
+  handlers.onStart(data.sources ?? []);
+  const ans = data.answer ?? "";
+  for (let i = 0; i < ans.length; i += REST_RAG_DELTA_CHUNK) {
+    handlers.onDelta(ans.slice(i, i + REST_RAG_DELTA_CHUNK));
+  }
+  if (data.proposals?.length && handlers.onProposals) {
+    handlers.onProposals(data.proposals);
+  }
 }
 
 export type FetchChatHistoryParams = {

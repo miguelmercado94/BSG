@@ -57,7 +57,7 @@ public class VectorProperties {
      * Útil para depurar Pinecone/embeddings. Desactivar para indexar todo el repositorio.
      */
     private boolean ingestClasspathSampleOnly = false;
-    /** Ruta bajo {@code src/main/resources} (p. ej. {@code test_gemini_key.py}). */
+    /** Ruta bajo {@code src/main/resources} (p. ej. un .py de prueba para ingesta mínima). */
     private String classpathSampleResource = "test_gemini_key.py";
 
     public String getStore() {

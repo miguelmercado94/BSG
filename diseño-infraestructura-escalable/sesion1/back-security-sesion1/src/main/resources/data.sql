@@ -27,11 +27,11 @@ INSERT INTO operation (path, name, http_method, module_id, permite_all, active) 
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/vector/index', 'DOC_VECTOR_INDEX', 'DELETE', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/vector/ingest/stream', 'DOC_VECTOR_INGEST_STREAM', 'POST', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/vector/chat', 'DOC_VECTOR_CHAT', 'POST', 2, FALSE, TRUE);
+INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/vector/chat/rag-turn', 'DOC_VECTOR_CHAT_RAG_TURN', 'POST', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/vector/chat/history', 'DOC_VECTOR_CHAT_HISTORY', 'GET', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/support/markdown', 'DOC_SUPPORT_MARKDOWN', 'POST', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/support/markdown', 'DOC_SUPPORT_MARKDOWN_DELETE', 'DELETE', 2, FALSE, TRUE);
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/firestore/health', 'DOC_FIRESTORE_HEALTH', 'GET', 2, TRUE, TRUE);
-INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/ws/rag-chat', 'DOC_WS_RAG_CHAT', 'GET', 2, FALSE, TRUE);
 
 -- Dominio células / tareas / listado soporte (DocViz)
 INSERT INTO operation (path, name, http_method, module_id, permite_all, active) VALUES ('/cells', 'DOC_CELL_LIST', 'GET', 2, FALSE, TRUE);

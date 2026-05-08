@@ -1,0 +1,5 @@
+# Plantilla sin secretos: cópiala a terraform.tfvars y pon tu clave OpenAI ahí.
+# terraform.tfvars está en .gitignore y es donde Terraform lee los valores.
+
+groq_api_key   = ""
+openai_api_key = "sk_REEMPLAZA"

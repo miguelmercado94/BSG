@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { SupportDocument } from "../types";
+import { randomUuid } from "../util/randomUuid";
 
 const STORAGE_PREFIX = "docviz_support_";
 
@@ -43,10 +44,7 @@ function saveToStorage(userId: string, docs: SupportDocument[]): void {
 }
 
 function newId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `sup-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  return randomUuid();
 }
 
 /** Normaliza nombre y fuerza extensión .md */
