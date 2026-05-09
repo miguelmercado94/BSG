@@ -2,6 +2,8 @@
 # Activación: --spring.profiles.active=pdn
 
 spring:
+  main:
+    lazy-initialization: true
   sql:
     init:
       mode: never
