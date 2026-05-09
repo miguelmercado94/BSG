@@ -12,7 +12,7 @@ server {
     # Cloud Map (*.bsg.internal): sin esto Nginx resuelve el upstream al arrancar y puede fallar si el DNS aún no existe → el task nuevo
     # no pasa healthcheck y ECS sigue sirviendo la imagen antigua. Resolver VPC + proxy_pass con variable fuerza resolución por petición.
     # Docker Compose: NGINX_RESOLVER=127.0.0.11 | Fargate: 169.254.169.253 (DNS de Amazon en la VPC).
-    resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+    resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
 
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss;
