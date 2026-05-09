@@ -1,6 +1,9 @@
 .terraform/
 *.tfstate
 *.tfstate.backup
+# Plan binarios (terraform plan -out=tfplan / tfplan-hc / …)
+tfplan*
+*.tfplan
 .terraform.lock.hcl
 *.exe
 terraform.tfvars
