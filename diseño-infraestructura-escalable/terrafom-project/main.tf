@@ -31,6 +31,16 @@ variable "openai_api_key" {
   default     = ""
 }
 
+# Imágenes ECS: tag = contenido de sesion1/*/version.txt (misma fuente que el versionado del repo / CI).
+locals {
+  frontend_version      = chomp(trimspace(file("${path.module}/../sesion1/frontend-sesion1/version.txt")))
+  backend_version       = chomp(trimspace(file("${path.module}/../sesion1/backend-sesion1/version.txt")))
+  back_security_version = chomp(trimspace(file("${path.module}/../sesion1/back-security-sesion1/version.txt")))
+  frontend_image        = "mmercado94/frontend-sesion1:${local.frontend_version}"
+  backend_image         = "mmercado94/backend-sesion1:${local.backend_version}"
+  back_security_image   = "mmercado94/back-security-sesion1:${local.back_security_version}"
+}
+
 # 3. Agrupación lógica de subredes para la base de datos
 resource "aws_db_subnet_group" "bsg_subnets" {
   name       = "bsg-subnet-group"
@@ -362,9 +372,10 @@ resource "aws_service_discovery_service" "back_security_sd" {
   dns_config {
     namespace_id   = aws_service_discovery_private_dns_namespace.bsg_namespace.id
     routing_policy = "MULTIVALUE"
+    # A (no solo SRV): Nginx resuelve A/AAAA; solo-SRV no resuelve el nombre del servicio.
     dns_records {
       ttl  = 60
-      type = "SRV"
+      type = "A"
     }
   }
   health_check_custom_config {
@@ -383,7 +394,7 @@ resource "aws_ecs_task_definition" "back_security_task" {
 
   container_definitions = jsonencode([{
     name         = "back-security"
-    image        = "mmercado94/back-security-sesion1:1.0.7"
+    image        = local.back_security_image
     essential    = true
     portMappings = [{ containerPort = 8081, hostPort = 8081, protocol = "tcp" }]
     environment = [
@@ -405,6 +416,13 @@ resource "aws_ecs_task_definition" "back_security_task" {
         "awslogs-stream-prefix" = "ecs"
       }
     }
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/security-auth/actuator/health >/dev/null || exit 1"]
+      interval    = 15
+      timeout     = 5
+      retries     = 4
+      startPeriod = 150
+    }
   }])
 }
 
@@ -424,7 +442,6 @@ resource "aws_ecs_service" "back_security_service" {
   service_registries {
     registry_arn   = aws_service_discovery_service.back_security_sd.arn
     container_name = "back-security"
-    container_port = 8081
   }
 
   # Ignoramos cambios en la tarea para que GitHub Actions pueda actualizar 
@@ -544,7 +561,7 @@ resource "aws_service_discovery_service" "backend_sd" {
     routing_policy = "MULTIVALUE"
     dns_records {
       ttl  = 60
-      type = "SRV"
+      type = "A"
     }
   }
   health_check_custom_config {
@@ -563,7 +580,7 @@ resource "aws_ecs_task_definition" "backend_task" {
 
   container_definitions = jsonencode([{
     name         = "backend"
-    image        = "mmercado94/backend-sesion1:3.0.33"
+    image        = local.backend_image
     essential    = true
     portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
     environment = [
@@ -620,7 +637,6 @@ resource "aws_ecs_service" "backend_service" {
   service_registries {
     registry_arn   = aws_service_discovery_service.backend_sd.arn
     container_name = "backend"
-    container_port = 8080
   }
 }
 
@@ -646,9 +662,8 @@ resource "aws_apigatewayv2_route" "backend_route" {
 # =========================================================
 # 18. Frontend SPA (Nginx) — ALB + ECS Fargate
 # =========================================================
-# Imagen: Docker Hub (misma convención que los backends). Build:
-#   docker build -t mmercado94/frontend-sesion1:1.0.7 sesion1/frontend-sesion1
-# El entrypoint genera runtime-config.js con BACKEND_URL / SECURITY_URL → API Gateway público.
+# Imagen: tag leído de sesion1/frontend-sesion1/version.txt (local.frontend_image). Build y push a Docker Hub con ese tag.
+# El entrypoint genera runtime-config.js (BACKEND_URL / SECURITY_URL relativos al ALB en ECS).
 
 resource "aws_security_group" "alb_frontend_sg" {
   name        = "alb-bsg-frontend"
@@ -746,7 +761,7 @@ resource "aws_ecs_task_definition" "frontend_task" {
 
   container_definitions = jsonencode([{
     name         = "frontend"
-    image        = "mmercado94/frontend-sesion1:1.0.10"
+    image        = local.frontend_image
     essential    = true
     portMappings = [{ containerPort = 80, hostPort = 80, protocol = "tcp" }]
     environment = [
