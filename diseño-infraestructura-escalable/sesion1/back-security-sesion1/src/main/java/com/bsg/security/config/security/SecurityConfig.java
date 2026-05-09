@@ -35,6 +35,17 @@ public class SecurityConfig {
                         // CORS preflight must be unauthenticated and return 2xx.
                         .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .pathMatchers("/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**").permitAll()
+                        // Públicas (equiv. permite_all en BD); sin filas en operation en RDS el manager denegaba todo.
+                        .pathMatchers(HttpMethod.GET, "/api/public/health", "/actuator/health").permitAll()
+                        .pathMatchers(HttpMethod.POST,
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/refresh",
+                                "/api/v1/auth/logout",
+                                "/api/v1/auth/forgot-password",
+                                "/api/v1/auth/reset-password",
+                                "/api/v1/customers")
+                                .permitAll()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/auth/validate").permitAll()
                         .anyExchange().access(authorizationManager)
                 )
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
