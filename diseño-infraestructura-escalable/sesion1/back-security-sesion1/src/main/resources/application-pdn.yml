@@ -30,7 +30,7 @@ management:
       show-details: never
   health:
     redis:
-      enabled: true
+      enabled: false
 
 logging:
   level:
