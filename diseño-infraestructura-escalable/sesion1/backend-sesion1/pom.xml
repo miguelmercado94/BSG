@@ -15,7 +15,7 @@
     <artifactId>backend-sesion1</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>Document Context Visualizer API</name>
-    <description>Git explorer + RAG (PostgreSQL/pgvector o Pinecone) + chat local (Ollama) o nube (OpenAI chat + embeddings)</description>
+    <description>Git explorer + RAG (PostgreSQL/pgvector) + chat local (Ollama) o nube (OpenAI chat + embeddings)</description>
 
     <properties>
         <java.version>21</java.version>
@@ -46,6 +46,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -101,7 +105,7 @@
             <artifactId>firebase-admin</artifactId>
             <version>9.4.3</version>
         </dependency>
-        <!-- Siempre en el classpath: embeddings locales (pgvector) vía Ollama; evita fallback a Pinecone sin API key. -->
+        <!-- Siempre en el classpath: embeddings locales (pgvector) vía Ollama cuando corresponda al perfil. -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-ollama</artifactId>

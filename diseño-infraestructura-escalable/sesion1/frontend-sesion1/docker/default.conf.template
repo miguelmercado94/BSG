@@ -12,15 +12,30 @@ server {
     # Cloud Map (*.bsg.internal): sin esto Nginx resuelve el upstream al arrancar y puede fallar si el DNS aún no existe → el task nuevo
     # no pasa healthcheck y ECS sigue sirviendo la imagen antigua. Resolver VPC + proxy_pass con variable fuerza resolución por petición.
     # Docker Compose: NGINX_RESOLVER=127.0.0.11 | Fargate: 169.254.169.253 (DNS de Amazon en la VPC).
-    resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+    resolver ${NGINX_RESOLVER} valid=5s ipv6=off;
 
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss;
 
-    # DOCVIZ_UPSTREAM / SECURITY_UPSTREAM: docker-compose → http://backend:8080; ECS → http://docviz.bsg.internal:8080
+    # Chunks Vite: si el archivo no existe (hash nuevo tras deploy + navegador con index viejo),
+    # NO hacer fallback a index.html — devolvería text/html y el error «MIME type ... module script».
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # Shell SPA (/app, /support/…) sin caché fuerte: evita mezclar index.html viejo con JS nuevo.
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+    }
+
+    # Cloud Map: DOCVIZ_UPSTREAM debe ir en variable — proxy_pass URL literal cachea IP al arrancar y tras redeploy ECS
+    # el backend cambia de IP → 502 «Host is unreachable». Variable + resolver fuerza re-resolución (valid=…).
     location /api/ {
+        rewrite ^/api/(.*)$ /docviz/$1 break;
         set $docviz_upstream "${DOCVIZ_UPSTREAM}";
-        proxy_pass $docviz_upstream/docviz/;
+        proxy_pass $docviz_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -35,8 +50,9 @@ server {
     }
 
     location /security-api/ {
+        rewrite ^/security-api/(.*)$ /security-auth/$1 break;
         set $security_upstream "${SECURITY_UPSTREAM}";
-        proxy_pass $security_upstream/security-auth/;
+        proxy_pass $security_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -56,7 +72,8 @@ server {
         expires -1;
     }
 
-    location / {
-        try_files $uri $uri/ /index.html;
+    location = / {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
     }
 }
