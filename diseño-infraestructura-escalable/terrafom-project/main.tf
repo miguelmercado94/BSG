@@ -1,3 +1,8 @@
+# -----------------------------------------------------------------------------
+# Infra activa: back-security + DocViz backend + frontend SPA (ALB público → ECS Nginx).
+# El navegador usa mismo origen: /api → DocViz, /security-api → back-security (proxy Nginx).
+# -----------------------------------------------------------------------------
+
 # 1. Localización de tu VPC por ID
 data "aws_vpc" "mi_vpc" {
   id = "vpc-0dc414704fe461959"
@@ -16,29 +21,28 @@ data "aws_subnets" "mis_subredes" {
   }
 }
 
-# Opcional / legado (ya no se inyecta en ECS si chat = OpenAI).
+# Usadas al descomentar DocViz backend (sección 15–17); declaradas para compatibilidad con terraform.tfvars.
 variable "groq_api_key" {
   type        = string
   sensitive   = true
-  description = "Deprecated: chat usa OpenAI. Dejar vacío."
+  description = "Deprecated: solo backend DocViz. Dejar vacío."
   default     = ""
 }
 
 variable "openai_api_key" {
   type        = string
   sensitive   = true
-  description = "API key de OpenAI: chat (GPT-4.1 Mini) + embeddings RAG (OPENAI_API_KEY en ECS)."
+  description = "Solo backend DocViz (ECS). No usada en fase solo back-security."
   default     = ""
 }
 
-# Imágenes ECS: tag = contenido de sesion1/*/version.txt (misma fuente que el versionado del repo / CI).
 locals {
-  frontend_version      = chomp(trimspace(file("${path.module}/../sesion1/frontend-sesion1/version.txt")))
-  backend_version       = chomp(trimspace(file("${path.module}/../sesion1/backend-sesion1/version.txt")))
   back_security_version = chomp(trimspace(file("${path.module}/../sesion1/back-security-sesion1/version.txt")))
-  frontend_image        = "mmercado94/frontend-sesion1:${local.frontend_version}"
-  backend_image         = "mmercado94/backend-sesion1:${local.backend_version}"
   back_security_image   = "mmercado94/back-security-sesion1:${local.back_security_version}"
+  backend_version       = chomp(trimspace(file("${path.module}/../sesion1/backend-sesion1/version.txt")))
+  backend_image         = "mmercado94/backend-sesion1:${local.backend_version}"
+  frontend_version      = chomp(trimspace(file("${path.module}/../sesion1/frontend-sesion1/version.txt")))
+  frontend_image        = "mmercado94/frontend-sesion1:${local.frontend_version}"
 }
 
 # 3. Agrupación lógica de subredes para la base de datos
@@ -72,7 +76,7 @@ resource "aws_security_group_rule" "rds_egress_all" {
   security_group_id = aws_security_group.rds_sg.id
 }
 
-# 5. La Instancia RDS (PostgreSQL 16)
+# 5. La Instancia RDS (PostgreSQL 16) — usada por back-security (R2DBC) y más adelante DocViz.
 resource "aws_db_instance" "postgres_bsg" {
   identifier        = "bsg-rds-instance"
   allocated_storage = 20
@@ -91,9 +95,14 @@ resource "aws_db_instance" "postgres_bsg" {
   skip_final_snapshot = true
 }
 
-# 6. Salida de datos (Endpoint de conexión)
 output "rds_endpoint" {
   value = aws_db_instance.postgres_bsg.endpoint
+}
+
+# Nombre lógico de la BD JDBC del DocViz backend (DATABASE_URL …/docviz). Crear en PostgreSQL: CREATE DATABASE docviz;
+output "docviz_database_name" {
+  value       = "docviz"
+  description = "Base PostgreSQL que debe existir en RDS para backend-sesion1"
 }
 
 # =========================================================
@@ -101,9 +110,8 @@ output "rds_endpoint" {
 # =========================================================
 resource "aws_dynamodb_table" "bsg_revoked_tokens" {
   name         = "bsg_revoked_tokens"
-  billing_mode = "PAY_PER_REQUEST" # Capacidad bajo demanda
-
-  hash_key = "access_token_hash"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "access_token_hash"
 
   attribute {
     name = "access_token_hash"
@@ -124,7 +132,6 @@ resource "aws_dynamodb_table" "bsg_revoked_tokens" {
     projection_type = "ALL"
   }
 
-  # Habilitamos el TTL para que Dynamo borre automáticamente los tokens que ya expiraron
   ttl {
     attribute_name = "ttl"
     enabled        = true
@@ -157,7 +164,7 @@ resource "aws_security_group" "redis_sg" {
     from_port   = 6379
     to_port     = 6379
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Permitir acceso desde la VPC
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -186,7 +193,7 @@ output "redis_endpoint" {
 }
 
 # =========================================================
-# 9. Cloud Map (Service Discovery) - Red interna
+# 9. Cloud Map (Service Discovery) — DNS interno hacia el task Fargate (security.bsg.internal)
 # =========================================================
 resource "aws_service_discovery_private_dns_namespace" "bsg_namespace" {
   name        = "bsg.internal"
@@ -199,27 +206,23 @@ output "service_discovery_namespace_id" {
 }
 
 # =========================================================
-# 10. API Gateway (HTTP API v2) - Entrada Pública
+# 10. API Gateway (HTTP API v2) — entrada pública hacia back-security (VPC Link)
 # =========================================================
 resource "aws_apigatewayv2_api" "bsg_gateway" {
   name          = "bsg-api-gateway"
   protocol_type = "HTTP"
-  description   = "Gateway principal para enrutar peticiones al frontend y microservicios"
+  description   = "HTTP API — /security-auth/* y /docviz/* hacia ECS (NLB interno)"
 
-  # Habilitamos CORS por defecto para evitar bloqueos con el SPA del frontend
   cors_configuration {
     allow_credentials = true
     allow_origins = [
-      "http://bsg-frontend-alb-1943066260.us-east-1.elb.amazonaws.com",
-      "https://bsg-frontend-alb-1943066260.us-east-1.elb.amazonaws.com",
       "http://localhost:5173",
       "http://127.0.0.1:5173",
+      "http://${aws_lb.bsg_frontend_alb.dns_name}",
     ]
     allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    # Cabeceras pedidas en Access-Control-Request-Headers (incl. extensiones); * evita fallos de preflight.
     allow_headers = ["*"]
-    expose_headers = ["X-DocViz-Resolved-Conversation-Id"]
-    max_age          = 3600
+    max_age       = 3600
   }
 }
 
@@ -230,24 +233,21 @@ resource "aws_apigatewayv2_stage" "bsg_gateway_default_stage" {
 }
 
 locals {
-  # Base pública del HTTP API (tests/cURL externos). El SPA en el ALB NO debe apuntar aquí:
-  # API Gateway HTTP tiene tope ~30s en integraciones → 503 en NDJSON largos (/vector/ingest/stream, rag-turn, etc.).
   api_gateway_http_base = trimsuffix(aws_apigatewayv2_api.bsg_gateway.api_endpoint, "/")
 }
 
 output "api_gateway_endpoint" {
   value       = aws_apigatewayv2_api.bsg_gateway.api_endpoint
-  description = "URL base pública del API Gateway"
+  description = "URL base pública del API Gateway (/security-auth/*, /docviz/*)"
 }
 
 # =========================================================
-# 11. S3 Buckets - Archivos y Soporte DocViz
+# 11. S3 — DocViz backend (soporte, borradores, workarea)
+# Crear en RDS la base **docviz** (jdbc .../docviz) además de bsg_security.
 # =========================================================
-# Nota: Los nombres de S3 deben ser únicos a nivel mundial.
-# Agregamos una terminación aleatoria o tu ID para evitar choques de nombres.
 resource "aws_s3_bucket" "soporte_bucket" {
   bucket        = "bsg-docviz-soporte-env"
-  force_destroy = true # Permite destruir el bucket con Terraform aunque tenga archivos
+  force_destroy = true
 }
 
 resource "aws_s3_bucket" "borradores_bucket" {
@@ -269,13 +269,12 @@ output "s3_buckets" {
 }
 
 # =========================================================
-# 12. ECS Fargate - Clúster, Roles y Permisos
+# 12. ECS Fargate — Clúster, roles y SG para back-security
 # =========================================================
 resource "aws_ecs_cluster" "bsg_cluster" {
   name = "bsg-cluster"
 }
 
-# Rol de ejecución (Para que AWS pueda descargar tu imagen y escribir logs)
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "bsg-ecs-task-execution-role"
   assume_role_policy = jsonencode({
@@ -293,7 +292,6 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Rol de la Tarea (Para que tu código Java pueda interactuar con DynamoDB)
 resource "aws_iam_role" "ecs_task_role" {
   name = "bsg-ecs-task-role"
   assume_role_policy = jsonencode({
@@ -319,13 +317,11 @@ resource "aws_iam_role_policy" "dynamodb_task_policy" {
   })
 }
 
-# Grupo de Logs para ver la consola de Spring Boot
 resource "aws_cloudwatch_log_group" "back_security_logs" {
   name              = "/ecs/bsg-back-security"
   retention_in_days = 7
 }
 
-# Grupo de Seguridad del Contenedor
 resource "aws_security_group" "ecs_security_sg" {
   name   = "ecs-back-security-sg"
   vpc_id = data.aws_vpc.mi_vpc.id
@@ -334,7 +330,7 @@ resource "aws_security_group" "ecs_security_sg" {
     from_port   = 8081
     to_port     = 8081
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Abierto para el API Gateway
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -345,7 +341,6 @@ resource "aws_security_group" "ecs_security_sg" {
   }
 }
 
-# Reglas para que ECS pueda hablar con RDS y Redis internamente
 resource "aws_security_group_rule" "rds_from_ecs" {
   type                     = "ingress"
   from_port                = 5432
@@ -365,21 +360,111 @@ resource "aws_security_group_rule" "redis_from_ecs" {
 }
 
 # =========================================================
-# 13. ECS Task & Service - BSG Security
+# 12b. NLB interno (TCP 8081) — integración privada HTTP API
+# API Gateway HTTP API + VPC Link con solo ARN de Cloud Map suele responder 500 aunque el task
+# funcione por IP; AWS documenta integración estable contra ARN de listener de NLB/ALB.
+# =========================================================
+resource "aws_lb" "back_security_nlb" {
+  name               = "bsg-back-sec-nlb"
+  internal           = true
+  load_balancer_type = "network"
+  subnets            = data.aws_subnets.mis_subredes.ids
+}
+
+resource "aws_lb_target_group" "back_security_nlb_tg" {
+  name        = "bsg-sec-nlb-tg"
+  port        = 8081
+  protocol    = "TCP"
+  vpc_id      = data.aws_vpc.mi_vpc.id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    protocol            = "HTTP"
+    path                = "/security-auth/actuator/health"
+    port                = "traffic-port"
+    matcher             = "200"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+}
+
+resource "aws_lb_listener" "back_security_nlb_listener" {
+  load_balancer_arn = aws_lb.back_security_nlb.arn
+  port              = 8081
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.back_security_nlb_tg.arn
+  }
+}
+
+output "back_security_nlb_dns" {
+  value       = aws_lb.back_security_nlb.dns_name
+  description = "DNS interno del NLB back-security (desde VPC; API Gateway VPC Link usa el listener ARN)"
+}
+
+# =========================================================
+# 12c. NLB interno DocViz backend (TCP 8080) — API Gateway → listener ARN (no Cloud Map directo)
+# =========================================================
+resource "aws_lb" "backend_docviz_nlb" {
+  name               = "bsg-backend-docviz-nlb"
+  internal           = true
+  load_balancer_type = "network"
+  subnets            = data.aws_subnets.mis_subredes.ids
+}
+
+resource "aws_lb_target_group" "backend_docviz_nlb_tg" {
+  name        = "bsg-backend-docviz-tg"
+  port        = 8080
+  protocol    = "TCP"
+  vpc_id      = data.aws_vpc.mi_vpc.id
+  target_type = "ip"
+
+  # HTTP: Spring Boot Actuator /docviz/actuator/health (200 cuando la app y la BD están listas).
+  # DocvizUserFilter exime /actuator de X-DocViz-User. Evita marcar “healthy” solo por puerto TCP abierto.
+  health_check {
+    enabled             = true
+    protocol            = "HTTP"
+    path                = "/docviz/actuator/health"
+    port                = "traffic-port"
+    matcher             = "200"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+}
+
+resource "aws_lb_listener" "backend_docviz_nlb_listener" {
+  load_balancer_arn = aws_lb.backend_docviz_nlb.arn
+  port              = 8080
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend_docviz_nlb_tg.arn
+  }
+}
+
+output "backend_docviz_nlb_dns" {
+  value       = aws_lb.backend_docviz_nlb.dns_name
+  description = "DNS interno NLB DocViz backend (integración API GW = ARN del listener)"
+}
+
+# =========================================================
+# 13. ECS Task & Service — back-security-sesion1
 # =========================================================
 resource "aws_service_discovery_service" "back_security_sd" {
-  name = "security" # El nombre DNS será: security.bsg.internal
+  name = "security"
   dns_config {
     namespace_id   = aws_service_discovery_private_dns_namespace.bsg_namespace.id
     routing_policy = "MULTIVALUE"
-    # A (no solo SRV): Nginx resuelve A/AAAA; solo-SRV no resuelve el nombre del servicio.
     dns_records {
       ttl  = 60
       type = "A"
     }
-  }
-  health_check_custom_config {
-    failure_threshold = 1
   }
 }
 
@@ -387,8 +472,8 @@ resource "aws_ecs_task_definition" "back_security_task" {
   family                   = "bsg-back-security"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "256" # 0.25 vCPU
-  memory                   = "512" # 512MB RAM
+  cpu                      = "256"
+  memory                   = "512"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
@@ -427,11 +512,12 @@ resource "aws_ecs_task_definition" "back_security_task" {
 }
 
 resource "aws_ecs_service" "back_security_service" {
-  name            = "bsg-back-security-service"
-  cluster         = aws_ecs_cluster.bsg_cluster.id
-  task_definition = aws_ecs_task_definition.back_security_task.arn
-  launch_type     = "FARGATE"
-  desired_count   = 1
+  name             = "bsg-back-security-service"
+  cluster          = aws_ecs_cluster.bsg_cluster.id
+  task_definition  = aws_ecs_task_definition.back_security_task.arn
+  launch_type      = "FARGATE"
+  desired_count    = 1
+  platform_version = "LATEST"
 
   network_configuration {
     subnets          = data.aws_subnets.mis_subredes.ids
@@ -444,46 +530,22 @@ resource "aws_ecs_service" "back_security_service" {
     container_name = "back-security"
   }
 
-  # Ignoramos cambios en la tarea para que GitHub Actions pueda actualizar 
-  # la versión de la imagen sin que Terraform lo revierta en el futuro.
+  load_balancer {
+    target_group_arn = aws_lb_target_group.back_security_nlb_tg.arn
+    container_name   = "back-security"
+    container_port   = 8081
+  }
+
+  depends_on = [aws_lb_listener.back_security_nlb_listener]
+
   lifecycle {
     ignore_changes = [task_definition]
   }
 }
 
 # =========================================================
-# 14. Integración de API Gateway con ECS (VPC Link)
-# =========================================================
-resource "aws_apigatewayv2_vpc_link" "bsg_vpc_link" {
-  name               = "bsg-vpc-link"
-  security_group_ids = [aws_security_group.ecs_security_sg.id]
-  subnet_ids         = data.aws_subnets.mis_subredes.ids
-}
-
-resource "aws_apigatewayv2_integration" "security_integration" {
-  api_id             = aws_apigatewayv2_api.bsg_gateway.id
-  integration_type   = "HTTP_PROXY"
-  integration_uri    = aws_service_discovery_service.back_security_sd.arn
-  integration_method = "ANY"
-  connection_type    = "VPC_LINK"
-  connection_id      = aws_apigatewayv2_vpc_link.bsg_vpc_link.id
-}
-
-# HTTP API solo admite integraciones proxy; ANY incluye OPTIONS y lo manda por VPC Link → preflight no 2xx.
-# Sin ruta ANY, API Gateway contesta OPTIONS usando cors_configuration del API.
-locals {
-  api_gateway_proxy_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
-}
-
-resource "aws_apigatewayv2_route" "security_route" {
-  for_each  = toset(local.api_gateway_proxy_methods)
-  api_id    = aws_apigatewayv2_api.bsg_gateway.id
-  route_key = "${each.key} /security-auth/{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.security_integration.id}"
-}
-
-# =========================================================
-# 15. IAM Roles & Security Group - DocViz Backend
+# 13b. DocViz backend-sesion1 — S3 + IAM, SG, Cloud Map, ECS (Fargate 4 vCPU / 16 GiB, core LLM)
+# DATABASE_URL → base **docviz** en el mismo RDS. Ejecutar: CREATE DATABASE docviz;
 # =========================================================
 resource "aws_iam_role" "ecs_backend_task_role" {
   name = "bsg-ecs-backend-task-role"
@@ -497,7 +559,6 @@ resource "aws_iam_role" "ecs_backend_task_role" {
   })
 }
 
-# Permisos explícitos para que el backend maneje los 3 buckets de S3
 resource "aws_iam_role_policy" "s3_task_policy" {
   name = "bsg-s3-task-policy"
   role = aws_iam_role.ecs_backend_task_role.id
@@ -551,11 +612,8 @@ resource "aws_security_group_rule" "rds_from_backend" {
   source_security_group_id = aws_security_group.ecs_backend_sg.id
 }
 
-# =========================================================
-# 16. ECS Task & Service - DocViz Backend
-# =========================================================
 resource "aws_service_discovery_service" "backend_sd" {
-  name = "docviz" # Dominio: docviz.bsg.internal
+  name = "docviz"
   dns_config {
     namespace_id   = aws_service_discovery_private_dns_namespace.bsg_namespace.id
     routing_policy = "MULTIVALUE"
@@ -564,17 +622,14 @@ resource "aws_service_discovery_service" "backend_sd" {
       type = "A"
     }
   }
-  health_check_custom_config {
-    failure_threshold = 1
-  }
 }
 
 resource "aws_ecs_task_definition" "backend_task" {
   family                   = "bsg-backend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "1024" # 1 vCPU — ingesta + embeddings + Git + Tomcat
-  memory                   = "2048" # 2 GB — evita OOM con OpenAI/pgvector bajo carga
+  cpu                      = "4096"  # 4 vCPU — ingesta, embeddings, Tomcat, LLM
+  memory                   = "16384" # 16 GiB
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_backend_task_role.arn
 
@@ -584,14 +639,12 @@ resource "aws_ecs_task_definition" "backend_task" {
     essential    = true
     portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
     environment = [
-      { name = "JAVA_TOOL_OPTIONS", value = "-XX:MaxRAMPercentage=68 -XX:+ExitOnOutOfMemoryError -XX:+UseStringDeduplication" },
+      { name = "JAVA_TOOL_OPTIONS", value = "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+UseStringDeduplication" },
       { name = "SPRING_PROFILES_ACTIVE", value = "pdn" },
       { name = "DATABASE_URL", value = "jdbc:postgresql://${aws_db_instance.postgres_bsg.endpoint}/docviz" },
       { name = "DATABASE_USER", value = "bsg_admin" },
       { name = "DATABASE_PASSWORD", value = "PasswordSeguro123" },
-      # Chat + embeddings OpenAI (misma clave). Modelos por defecto en application-pdn.properties.
       { name = "OPENAI_API_KEY", value = var.openai_api_key },
-      # Spring Boot 3: relaxed binding a spring.ai.openai.*.api-key (por si el placeholder de properties falla en ECS).
       { name = "SPRING_AI_OPENAI_API_KEY", value = var.openai_api_key },
       { name = "SPRING_AI_OPENAI_CHAT_API_KEY", value = var.openai_api_key },
       { name = "SPRING_AI_OPENAI_EMBEDDING_API_KEY", value = var.openai_api_key },
@@ -599,8 +652,9 @@ resource "aws_ecs_task_definition" "backend_task" {
       { name = "SPRING_AI_MODEL_EMBEDDING_TEXT", value = "openai" },
       { name = "FIREBASE_ENABLED", value = "true" },
       { name = "FIREBASE_PROJECT_ID", value = "sesion-bsg" },
-      { name = "FIREBASE_CREDENTIALS_PATH", value = "sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
-      { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
+      # Misma ruta que Dockerfile (WORKDIR /app + COPY json). Ruta absoluta evita fallos si user.dir ≠ /app.
+      { name = "FIREBASE_CREDENTIALS_PATH", value = "/app/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
+      { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/app/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
       { name = "DOCVIZ_EMBEDDINGS_PROVIDER", value = "spring-ai" },
       { name = "DOCVIZ_VECTOR_EMBEDDINGS_PROVIDER", value = "spring-ai" },
       { name = "DOCVIZ_SUPPORT_ENABLED", value = "true" },
@@ -622,11 +676,12 @@ resource "aws_ecs_task_definition" "backend_task" {
 }
 
 resource "aws_ecs_service" "backend_service" {
-  name            = "bsg-backend-service"
-  cluster         = aws_ecs_cluster.bsg_cluster.id
-  task_definition = aws_ecs_task_definition.backend_task.arn
-  launch_type     = "FARGATE"
-  desired_count   = 1
+  name             = "bsg-backend-service"
+  cluster          = aws_ecs_cluster.bsg_cluster.id
+  task_definition  = aws_ecs_task_definition.backend_task.arn
+  launch_type      = "FARGATE"
+  desired_count    = 1
+  platform_version = "LATEST"
 
   network_configuration {
     subnets          = data.aws_subnets.mis_subredes.ids
@@ -638,15 +693,60 @@ resource "aws_ecs_service" "backend_service" {
     registry_arn   = aws_service_discovery_service.backend_sd.arn
     container_name = "backend"
   }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.backend_docviz_nlb_tg.arn
+    container_name   = "backend"
+    container_port   = 8080
+  }
+
+  # Arranque Spring + JDBC + pgvector: ignorar fallos del NLB un margen para no drenar la tarea nueva antes de 200 en /actuator/health.
+  health_check_grace_period_seconds = 120
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  depends_on = [aws_lb_listener.backend_docviz_nlb_listener]
+
+  # Sin ignore_changes: cada apply actualiza el servicio a la revisión de task_definition actual
+  # (imagen/env). Evita que ECS siga con una revisión antigua y el proxy Nginx reciba 502.
 }
 
 # =========================================================
-# 17. Integración de API Gateway con Backend DocViz
+# 14. API Gateway ↔ ECS (VPC Link + rutas /security-auth/{proxy+})
 # =========================================================
+resource "aws_apigatewayv2_vpc_link" "bsg_vpc_link" {
+  name               = "bsg-vpc-link"
+  security_group_ids = [aws_security_group.ecs_security_sg.id, aws_security_group.ecs_backend_sg.id]
+  subnet_ids         = data.aws_subnets.mis_subredes.ids
+}
+
+resource "aws_apigatewayv2_integration" "security_integration" {
+  api_id             = aws_apigatewayv2_api.bsg_gateway.id
+  integration_type   = "HTTP_PROXY"
+  integration_uri    = aws_lb_listener.back_security_nlb_listener.arn
+  integration_method = "ANY"
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.bsg_vpc_link.id
+}
+
+locals {
+  api_gateway_proxy_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
+}
+
+resource "aws_apigatewayv2_route" "security_route" {
+  for_each  = toset(local.api_gateway_proxy_methods)
+  api_id    = aws_apigatewayv2_api.bsg_gateway.id
+  route_key = "${each.key} /security-auth/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.security_integration.id}"
+}
+
 resource "aws_apigatewayv2_integration" "backend_integration" {
   api_id             = aws_apigatewayv2_api.bsg_gateway.id
   integration_type   = "HTTP_PROXY"
-  integration_uri    = aws_service_discovery_service.backend_sd.arn
+  integration_uri    = aws_lb_listener.backend_docviz_nlb_listener.arn
   integration_method = "ANY"
   connection_type    = "VPC_LINK"
   connection_id      = aws_apigatewayv2_vpc_link.bsg_vpc_link.id
@@ -660,14 +760,12 @@ resource "aws_apigatewayv2_route" "backend_route" {
 }
 
 # =========================================================
-# 18. Frontend SPA (Nginx) — ALB + ECS Fargate
+# 15. Frontend SPA (Vite + Nginx) — ALB público → ECS
+# docker/default.conf.template: /api → docviz, /security-api → security-auth (Cloud Map).
 # =========================================================
-# Imagen: tag leído de sesion1/frontend-sesion1/version.txt (local.frontend_image). Build y push a Docker Hub con ese tag.
-# El entrypoint genera runtime-config.js (BACKEND_URL / SECURITY_URL relativos al ALB en ECS).
-
 resource "aws_security_group" "alb_frontend_sg" {
   name        = "alb-bsg-frontend"
-  description = "HTTP del balanceador hacia el SPA"
+  description = "Public HTTP inbound for SPA ALB"
   vpc_id      = data.aws_vpc.mi_vpc.id
 
   ingress {
@@ -688,11 +786,11 @@ resource "aws_security_group" "alb_frontend_sg" {
 
 resource "aws_security_group" "ecs_frontend_sg" {
   name        = "ecs-bsg-frontend-sg"
-  description = "ECS frontend tasks; ingress only from frontend ALB"
+  description = "Frontend ECS tasks; ingress from SPA ALB only"
   vpc_id      = data.aws_vpc.mi_vpc.id
 
   ingress {
-    description     = "HTTP from ALB"
+    description     = "HTTP from frontend ALB"
     from_port       = 80
     to_port         = 80
     protocol        = "tcp"
@@ -708,11 +806,12 @@ resource "aws_security_group" "ecs_frontend_sg" {
 }
 
 resource "aws_lb" "bsg_frontend_alb" {
-  name               = "bsg-frontend-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_frontend_sg.id]
-  subnets            = data.aws_subnets.mis_subredes.ids
+  name                       = "bsg-frontend-alb"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb_frontend_sg.id]
+  subnets                    = data.aws_subnets.mis_subredes.ids
+  drop_invalid_header_fields = true
 }
 
 resource "aws_lb_target_group" "bsg_frontend_tg" {
@@ -755,17 +854,19 @@ resource "aws_ecs_task_definition" "frontend_task" {
   family                   = "bsg-frontend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([{
-    name         = "frontend"
-    image        = local.frontend_image
-    essential    = true
-    portMappings = [{ containerPort = 80, hostPort = 80, protocol = "tcp" }]
+    name      = "frontend"
+    image     = local.frontend_image
+    essential = true
+    portMappings = [{
+      containerPort = 80
+      protocol      = "tcp"
+    }]
     environment = [
-      # Rutas relativas al mismo ALB: Nginx /api/ y /security-api/ → Cloud Map (timeouts largos). Evita API Gateway en el navegador.
       { name = "BACKEND_URL", value = "/api" },
       { name = "SECURITY_URL", value = "/security-api" },
       { name = "DOCVIZ_UPSTREAM", value = "http://docviz.bsg.internal:8080" },
@@ -784,11 +885,12 @@ resource "aws_ecs_task_definition" "frontend_task" {
 }
 
 resource "aws_ecs_service" "frontend_service" {
-  name            = "bsg-frontend-service"
-  cluster         = aws_ecs_cluster.bsg_cluster.id
-  task_definition = aws_ecs_task_definition.frontend_task.arn
-  launch_type     = "FARGATE"
-  desired_count   = 1
+  name             = "bsg-frontend-service"
+  cluster          = aws_ecs_cluster.bsg_cluster.id
+  task_definition  = aws_ecs_task_definition.frontend_task.arn
+  launch_type      = "FARGATE"
+  desired_count    = 1
+  platform_version = "LATEST"
 
   load_balancer {
     target_group_arn = aws_lb_target_group.bsg_frontend_tg.arn
@@ -805,7 +907,7 @@ resource "aws_ecs_service" "frontend_service" {
   depends_on = [aws_lb_listener.bsg_frontend_http]
 }
 
-output "frontend_alb_dns" {
+output "frontend_alb_url" {
   value       = "http://${aws_lb.bsg_frontend_alb.dns_name}"
-  description = "URL del SPA (HTTP). Añade HTTPS con ACM + listener 443 cuando tengas dominio."
+  description = "SPA URL for end users (HTTP). Same-origin /api and /security-api proxied by Nginx."
 }
