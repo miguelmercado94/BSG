@@ -55,7 +55,7 @@ public class VectorIngestController {
 
     /**
      * Elimina todos los chunks vectoriales del namespace del repositorio conectado (pgvector: filas en
-     * {@code docviz_vector_chunk}; Pinecone: delete por namespace). Misma idea que vaciar el índice antes de re-indexar.
+     * {@code docviz_vector_chunk}). Misma idea que vaciar el índice antes de re-indexar.
      */
     @DeleteMapping("/vector/index")
     public ResponseEntity<Map<String, Object>> clearIndex() {

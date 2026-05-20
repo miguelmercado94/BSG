@@ -1,5 +1,10 @@
 # -----------------------------------------------------------------------------
-# Infra activa: back-security + DocViz backend + frontend SPA (ALB público → ECS Nginx).
+# Definición completa para despliegues futuros (terraform apply).
+# Estado en AWS (post-calificación): solo RDS + subnet group + SG RDS siguen activos;
+# ECS, API Gateway, Redis, DynamoDB, S3, ALB/NLB, etc. fueron destruidos para reducir costo.
+# Para volver a levantar todo: terraform apply (con terraform.tfvars y versiones en version.txt).
+# -----------------------------------------------------------------------------
+# Infra: back-security + DocViz backend + frontend SPA (ALB público → ECS Nginx).
 # El navegador usa mismo origen: /api → DocViz, /security-api → back-security (proxy Nginx).
 # -----------------------------------------------------------------------------
 

@@ -388,6 +388,9 @@ export function SupportCellTasksPage() {
               onChange={(ev) => setEnunciado(ev.target.value)}
               rows={5}
               required
+              minLength={1}
+              pattern=".*\S.*"
+              title="El enunciado es obligatorio y no puede ser solo espacios."
               placeholder="Describe el problema o la petición de soporte…"
             />
           </label>

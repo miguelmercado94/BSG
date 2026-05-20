@@ -30,6 +30,7 @@ import type {
   VectorIngestResponse,
   WorkAreaChangeBlock,
   WorkAreaFileProposal,
+  WorkAreaS3PromoteResponse,
 } from "../types";
 
 export const USER_HEADER = "X-DocViz-User";
@@ -213,7 +214,7 @@ export async function loginSecurity(body: {
     },
     body: JSON.stringify(payload),
   });
-  return parseJson<SecurityAuthToken>(res);
+  return parseJson<SecurityAuthToken>(res, "security");
 }
 
 /** Registro de cliente: POST .../api/v1/customers */
@@ -243,7 +244,7 @@ export async function registerSecurity(body: {
     },
     body: JSON.stringify(payload),
   });
-  return parseJson<RegisterUserResponse>(res);
+  return parseJson<RegisterUserResponse>(res, "security");
 }
 
 /** Revoca JWT en el micro de security (si hay access token guardado). */
@@ -289,10 +290,33 @@ function apiBase(): string {
   return v.replace(/\/$/, "");
 }
 
-async function parseJson<T>(res: Response): Promise<T> {
+type ProxyFailureKind = "docviz" | "security";
+
+/** Si Nginx devuelve HTML de error, evita mostrar la página entera en la UI. */
+function humanizeFailedFetchMessage(
+  res: Response,
+  body: string,
+  kind: ProxyFailureKind = "docviz",
+): string {
+  const raw = body.trim();
+  if (
+    /^<\s*html/i.test(raw) ||
+    /<title>\s*50[0-9]/i.test(raw) ||
+    /502\s+Bad\s+Gateway/i.test(raw) ||
+    /504\s+Gateway\s+Time-out/i.test(raw)
+  ) {
+    if (kind === "security") {
+      return `El servicio de seguridad no está disponible (${res.status} desde el proxy). Suele indicar que el micro back-security en ECS no respondió; revisa bsg-back-security-service y los logs /ecs/bsg-back-security en CloudWatch.`;
+    }
+    return `El API DocViz no está disponible (${res.status} desde el proxy). Suele indicar que el backend ECS no respondió en ese momento; revisa el servicio bsg-backend-service y los logs /ecs/bsg-backend en CloudWatch.`;
+  }
+  return raw || res.statusText;
+}
+
+async function parseJson<T>(res: Response, proxyKind: ProxyFailureKind = "docviz"): Promise<T> {
   const text = await res.text();
   if (!res.ok) {
-    let msg = text || res.statusText;
+    let msg = humanizeFailedFetchMessage(res, text || res.statusText, proxyKind);
     try {
       const j = JSON.parse(text) as { error?: string; message?: string };
       msg = j.message ?? j.error ?? msg;
@@ -1098,6 +1122,23 @@ export async function saveWorkAreaS3BorradorContent(
   }
 }
 
+/** POST /vector/work-area/s3-borrador-promote — borrador → workarea + pgvector; borra el objeto en borradores. */
+export async function promoteWorkAreaBorradorToWorkarea(
+  body: { objectKey: string; content: string },
+  init?: WorkAreaRequestInit,
+): Promise<WorkAreaS3PromoteResponse> {
+  const res = await fetch(`${apiBase()}/vector/work-area/s3-borrador-promote`, {
+    method: "POST",
+    headers: {
+      ...headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: init?.signal,
+  });
+  return parseJson<WorkAreaS3PromoteResponse>(res);
+}
+
 export async function restoreWorkAreaFromS3(init?: WorkAreaRequestInit): Promise<TaskArtifactRestoreResponse> {
   const res = await fetch(`${apiBase()}/vector/work-area/restore-s3`, {
     method: "POST",
@@ -1235,7 +1276,7 @@ export async function indexWorkAreaFileFromPath(
   return parseJson<VectorIngestResponse>(res);
 }
 
-/** Vacía el índice vectorial del repo actual (pgvector: borra filas del namespace; Pinecone: delete namespace). */
+/** Vacía el índice vectorial del repo actual (pgvector: borra filas del namespace). */
 export async function vectorClearIndex(): Promise<VectorClearResponse> {
   const res = await fetch(`${apiBase()}/vector/index`, {
     method: "DELETE",
@@ -1348,20 +1389,17 @@ async function vectorIngestFallbackProgress(
 
 export async function logoutSession(): Promise<void> {
   if (getUserId()) {
-    const res = await fetch(`${apiBase()}/session/logout`, {
-      method: "POST",
-      headers: headers(),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      let msg = text || res.statusText;
-      try {
-        const j = JSON.parse(text) as { error?: string; message?: string };
-        msg = j.message ?? j.error ?? msg;
-      } catch {
-        /* ignore */
+    try {
+      const res = await fetch(`${apiBase()}/session/logout`, {
+        method: "POST",
+        headers: headers(),
+      });
+      if (!res.ok) {
+        /* best-effort: 502 u otro fallo no debe bloquear cierre local (misma idea que logoutSecurity) */
+        void res.text();
       }
-      throw new Error(msg);
+    } catch {
+      /* red / backend caído: seguimos y limpiamos sesión en el cliente */
     }
   }
   try {

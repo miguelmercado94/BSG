@@ -12,6 +12,8 @@ import com.bsg.docviz.dto.S3FileUrlItem;
 
 import com.bsg.docviz.dto.VectorIngestResponse;
 
+import com.bsg.docviz.dto.WorkAreaS3PromoteResponse;
+
 import com.bsg.docviz.support.SupportS3Service;
 
 import com.bsg.docviz.vector.VectorIngestService;
@@ -684,6 +686,90 @@ public class WorkAreaS3ArtifactService {
                 utf8Content.getBytes(StandardCharsets.UTF_8),
 
                 "text/plain; charset=utf-8");
+
+    }
+
+
+
+    /**
+
+     * Publica el contenido en workarea, indexa en pgvector y elimina el objeto en borradores (misma hoja de nombre).
+
+     */
+
+    public WorkAreaS3PromoteResponse promoteBorradorToWorkareaAndReindex(
+
+            String userId, String taskHuCode, String borradorObjectKey, String utf8Content) {
+
+        if (utf8Content == null || utf8Content.isBlank()) {
+
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El contenido no puede estar vacío");
+
+        }
+
+        String borB = borradorBucket();
+
+        ensureArtifactKeyOwned(userId, taskHuCode, borB, borradorObjectKey);
+
+        String borPrefix = keyBuilder.borradoresPrefix(vectorNs(), taskHuCode, userId);
+
+        String k = borradorObjectKey.trim();
+
+        if (!k.startsWith(borPrefix)) {
+
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Clave de borrador inválida");
+
+        }
+
+        String leaf = k.substring(borPrefix.length()).replace('\\', '/');
+
+        if (leaf.isBlank()) {
+
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nombre de objeto inválido");
+
+        }
+
+        String waKey = keyBuilder.workareaKey(vectorNs(), taskHuCode, userId, leaf);
+
+        String waB = workareaBucket();
+
+        SupportS3Service s3 = supportS3.getIfAvailable();
+
+        if (s3 == null) {
+
+            throw new IllegalStateException("S3 no disponible");
+
+        }
+
+        s3.putObject(
+
+                waB,
+
+                waKey,
+
+                utf8Content.getBytes(StandardCharsets.UTF_8),
+
+                "text/plain; charset=utf-8");
+
+        VectorIngestResponse ingest = vectorIngestService.ingestWorkAreaFile(leaf, utf8Content);
+
+        s3.deleteObject(borB, k);
+
+        WorkAreaS3PromoteResponse out = new WorkAreaS3PromoteResponse();
+
+        out.setFilesProcessed(ingest.getFilesProcessed());
+
+        out.setChunksIndexed(ingest.getChunksIndexed());
+
+        out.setSkipped(ingest.getSkipped());
+
+        out.setNamespace(ingest.getNamespace());
+
+        out.setWorkareaBucket(waB);
+
+        out.setWorkareaObjectKey(waKey);
+
+        return out;
 
     }
 

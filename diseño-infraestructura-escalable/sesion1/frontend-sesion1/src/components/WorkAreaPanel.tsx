@@ -156,9 +156,9 @@ export function WorkAreaPanel({
         {!hideIntroHints ? (
           <>
             <p className="muted small work-area-panel__hint">
-              Tras cada respuesta del chat se lista lo publicado en S3 (borradores / workarea). Los nombres en amarillo
-              son borradores y en azul workarea; al elegir uno se muestra el contenido desde la URL presignada. Las
-              acciones de clonar/aceptar aplican solo a borradores generados en el flujo clásico (no solo-S3).
+              Tras cada respuesta del chat se lista lo publicado en S3 (borradores / workarea). Amarillo = borrador;
+              azul = workarea (indexado). En borrador, tras resolver el diff usa «Guardar» para pasar a workarea; workarea
+              es solo lectura en pantalla. Las acciones de clonar/aceptar aplican al flujo clásico con clon local.
             </p>
             {persistenceHint ? (
               <p className="muted small work-area-panel__hint" role="note">

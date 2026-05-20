@@ -147,7 +147,7 @@ public class GitRepositoryService implements GitRepositoryPort {
 
     /**
      * Descarga un único archivo (blob bajo demanda) y lo deja en el working tree: solo cuando hace
-     * falta visualizar, indexar en Pinecone o RAG — no el repo completo.
+     * falta visualizar, indexar en pgvector o RAG — no el repo completo.
      */
     public void materializeFileToWorkingTree(Path repoRoot, String revisionSpec, String repoRelativePath) {
         try {
@@ -184,7 +184,7 @@ public class GitRepositoryService implements GitRepositoryPort {
     }
 
     /**
-     * {@link #materializeFileToWorkingTree} y luego lectura desde el working tree (mismo flujo que ingesta Pinecone).
+     * {@link #materializeFileToWorkingTree} y luego lectura desde el working tree (mismo flujo que ingesta vectorial).
      */
     public byte[] materializeAndReadBytes(Path repoRoot, String revisionSpec, String repoRelativePath) {
         materializeFileToWorkingTree(repoRoot, revisionSpec, repoRelativePath);

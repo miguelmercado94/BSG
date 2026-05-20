@@ -185,9 +185,9 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       # Binario git en la imagen Alpine (evita ENOENT si PATH del JRE no incluye /usr/bin)
       DOCVIZ_CONTEXT_MASTERS_GIT_EXECUTABLE: /usr/bin/git
-      # Firestore: JSON montado en volumes (Sesion 1/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json → /run/secrets/...)
+      # Firestore: JSON montado en volumes (Sesion 1/bsg-sesion1-firebase-adminsdk-*.json → /run/secrets/...)
       FIREBASE_ENABLED: ${FIREBASE_ENABLED:-true}
-      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-sesion-bsg}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-bsg-sesion1}
       FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-/run/secrets/firebase-adminsdk.json}
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/run/secrets/firebase-adminsdk.json}
       # Develop/pdn en la misma imagen: GROQ_API_KEY + OPENAI_API_KEY para embeddings (ver application-develop.properties).
@@ -201,7 +201,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json:/run/secrets/firebase-adminsdk.json:ro
+      - ./bsg-sesion1-firebase-adminsdk-fbsvc-137f14c279.json:/run/secrets/firebase-adminsdk.json:ro
     restart: unless-stopped
 
   frontend:

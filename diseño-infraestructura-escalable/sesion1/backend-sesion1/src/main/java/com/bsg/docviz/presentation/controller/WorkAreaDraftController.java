@@ -9,6 +9,7 @@ import com.bsg.docviz.dto.WorkAreaDraftAcceptAllBody;
 import com.bsg.docviz.dto.WorkAreaDraftFinalizeBody;
 import com.bsg.docviz.dto.WorkAreaDraftPathBody;
 import com.bsg.docviz.dto.WorkAreaIndexFileBody;
+import com.bsg.docviz.dto.WorkAreaS3PromoteResponse;
 import com.bsg.docviz.dto.WorkAreaS3WorkareaSaveRequest;
 import com.bsg.docviz.application.port.output.WorkAreaDraftFilePort;
 import com.bsg.docviz.dto.TaskArtifactRestoreResponse;
@@ -176,6 +177,25 @@ public class WorkAreaDraftController {
         workAreaS3ArtifactService.updateBorradorObjectContent(
                 CurrentUser.require(), taskHu, body.getObjectKey(), body.getContent());
         return ResponseEntity.ok(Map.of("saved", Boolean.TRUE));
+    }
+
+    /**
+     * Escribe workarea, indexa en pgvector y elimina el objeto homólogo en borradores (transición amarillo → azul en UI).
+     */
+    @PostMapping("/s3-borrador-promote")
+    public ResponseEntity<WorkAreaS3PromoteResponse> promoteBorradorToWorkarea(
+            @Valid @RequestBody WorkAreaS3WorkareaSaveRequest body) {
+        String taskHu = DocvizTaskContext.taskLabelOrNull();
+        if (taskHu == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Falta cabecera " + DocvizUserFilter.TASK_HU_HEADER);
+        }
+        if (!workAreaS3ArtifactService.isS3Configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "S3 no configurado");
+        }
+        WorkAreaS3PromoteResponse out =
+                workAreaS3ArtifactService.promoteBorradorToWorkareaAndReindex(
+                        CurrentUser.require(), taskHu, body.getObjectKey(), body.getContent());
+        return ResponseEntity.ok(out);
     }
 
     /**

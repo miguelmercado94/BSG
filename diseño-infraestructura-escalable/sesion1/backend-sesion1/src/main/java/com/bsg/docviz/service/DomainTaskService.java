@@ -29,25 +29,50 @@ public class DomainTaskService {
 
     /**
      * Prefijo para el chat RAG (WebSocket): la primera respuesta debe ser un único documento JSON (idealmente en un bloque
-     * {@code ```json}). El backend parsea ese JSON y, si es un plan, ejecuta un paso por llamada al LLM.
+     * fence json). El backend parsea ese JSON y, si es un plan, ejecuta un paso por llamada al LLM.
+     * Debe mantenerse alineado con {@code frontend-sesion1/src/lib/ragChatDisplay.ts} (misma cadena).
+     * Caso informativo: solo JSON con campo {@code answer} completo; sin YAML. Caso edición: JSON más bloque YAML de propuestas.
      */
     public static final String RAG_CHAT_PROMPT_PREFIX =
-            "Responde ÚNICAMENTE con un documento JSON válido (puedes envolverlo en ```json … ```). Sin texto fuera del JSON.\n"
-                    + "Esquema obligatorio:\n"
-                    + "- Respuesta única: {\"kind\":\"direct\",\"answer\":\"markdown con la solución\"}\n"
-                    + "- Plan por pasos: {\"kind\":\"plan\",\"steps\":[{\"order\":1,\"summary\":\"…\","
-                    + "\"files\":[{\"path\":\"ruta/relativa.ext\",\"change\":\"…\"}]}]}\n"
-                    + "En `files` lista solo archivos a tocar en ese paso; si no hay, \"files\":[]. Enumera `order` 1,2,3,…\n"
-                    + "PROPUESTAS DE ARCHIVO (área de trabajo DocViz): si el enunciado pide crear, editar, quitar o ajustar "
-                    + "contenido en archivos del repositorio (p. ej. @[repo:…], docker-compose, YAML, código), después del JSON "
-                    + "añade un bloque ```yaml cuya raíz sea \"proposals:\" (path REPO/… o LOCAL/…, new, blocks con "
-                    + "start/end/type/lines). No pongas \"proposals\" dentro del JSON. \"answer\" resume en markdown. "
-                    + "Si kind es \"plan\", puedes posponer el ```yaml al último paso que toque archivos.\n"
-                    + "Ejemplo mínimo (direct): "
-                    + "{\"kind\":\"direct\",\"answer\":\"Quito redis del compose.\"}\n"
-                    + "```yaml\nproposals:\n- path: REPO/findu/docker-compose.yml\n  new: false\n  blocks:\n  "
-                    + "- { start: 10, end: 12, type: REPLACE, lines: [\"  x: y\"] }\n```\n"
-                    + "Enunciado:\n\n";
+            """
+            Responde ÚNICAMENTE con un documento JSON válido (puedes envolverlo en ```json … ```). Sin texto antes del JSON ni después del JSON salvo el bloque YAML opcional descrito abajo.
+
+            Esquema obligatorio del JSON:
+            - Respuesta única: {"kind":"direct","answer":"markdown"}
+            - Plan por pasos: {"kind":"plan","steps":[{"order":1,"summary":"…","files":[{"path":"ruta/relativa.ext","change":"…"}]}]}
+            En `files` lista solo archivos a tocar en ese paso; si no hay, "files":[]. Enumera `order` 1,2,3,…
+
+            Casos:
+            1) Preguntas solo informativas (listar dependencias, explicar código, describir qué servicios o librerías usa el proyecto, resumir sin modificar archivos): usa {"kind":"direct","answer":"…"} con la respuesta completa en markdown dentro de "answer". NO añadas ningún bloque ```yaml después del JSON.
+
+            Las menciones @[repo:ruta] y @[soporte:clave] solo acotan contexto RAG; no son por sí solas una petición de edición. Si el usuario pregunta sobre un archivo citado (dependencias, qué hace, etc.), sigue siendo caso 1): responde en "answer" sin YAML.
+
+            No incluyas bloque ```yaml si no hay ediciones reales (blocks no vacíos). Nunca devuelvas proposals con blocks: [] solo para citar una ruta; el usuario ve la lista de archivos en la UI cuando sí hay cambios.
+
+            2) Solo cuando el enunciado pide explícitamente crear, editar, quitar o ajustar contenido en archivos del repositorio o de soporte (p. ej. «modifica docker-compose», «añade la dependencia en build.gradle»): después del JSON cierra con un único bloque ```yaml cuya raíz sea "proposals:" (path REPO/… o LOCAL/…, new, blocks con start/end/type/lines). No pongas "proposals" dentro del JSON. Si kind es "plan", puedes posponer el ```yaml al último paso que toque archivos.
+
+            Ejemplo solo informativo:
+            ```json
+            {"kind":"direct","answer":"En este repositorio las dependencias AWS aparecen en …"}
+            ```
+
+            Ejemplo con cambios de archivo (solo si el enunciado lo exige):
+            ```json
+            {"kind":"direct","answer":"Actualizo el compose para quitar redis."}
+            ```
+            ```yaml
+            proposals:
+            - path: REPO/findu/docker-compose.yml
+              new: false
+              blocks:
+              - { start: 10, end: 12, type: REPLACE, lines: ["  x: y"] }
+            ```
+
+            Enunciado:
+
+
+            """
+                    .stripIndent();
 
     private final TaskJdbcRepository taskRepository;
     private final CellRepoJdbcRepository cellRepoRepository;

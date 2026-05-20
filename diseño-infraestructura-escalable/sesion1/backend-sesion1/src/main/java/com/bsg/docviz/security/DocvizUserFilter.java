@@ -32,6 +32,12 @@ public class DocvizUserFilter extends OncePerRequestFilter {
 
         String servletPath = request.getServletPath();
 
+        // NLB/ECS health checks sin cabecera de usuario (HTTP GET a /docviz/actuator/health)
+        if (servletPath.startsWith("/actuator")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         // Comprobación de Firestore sin sesión DocViz (solo lectura de conectividad)
         if ("GET".equalsIgnoreCase(request.getMethod()) && "/firestore/health".equals(servletPath)) {
             filterChain.doFilter(request, response);

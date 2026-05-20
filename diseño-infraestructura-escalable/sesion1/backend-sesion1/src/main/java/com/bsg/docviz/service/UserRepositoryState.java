@@ -15,7 +15,7 @@ public class UserRepositoryState {
     private String rootFolderLabel = "";
     /** Vista previa / RAG: independiente de la ingesta para que no compitan por los 100 MiB. */
     private final FileContentCache viewerContentCache = new FileContentCache();
-    /** Prefetch e ingesta a Pinecone. */
+    /** Prefetch e ingesta al índice pgvector. */
     private final FileContentCache ingestContentCache = new FileContentCache();
     /** Namespace vectorial fijado al conectar un repo de célula (mismo valor que en BD). Índice compartido por namespace. */
     private String vectorNamespaceOverride;

@@ -30,8 +30,7 @@ import {
   indexWorkAreaFileFromPath,
   fetchWorkAreaS3ArtifactBody,
   fetchWorkAreaS3Artifacts,
-  saveWorkAreaS3BorradorContent,
-  saveWorkAreaS3WorkareaAndReindex,
+  promoteWorkAreaBorradorToWorkarea,
   restoreWorkAreaFromS3,
   streamVectorChat,
   uploadSupportMarkdown,
@@ -208,11 +207,6 @@ function isS3BorradorArtifact(p: WorkAreaFileProposal): boolean {
   return Boolean(
     p.artifactViewOnly && p.s3Bucket && /borrador/i.test(p.s3Bucket) && p.s3ObjectKey?.trim(),
   );
-}
-
-/** Vista solo-S3 editable (texto UTF-8 en borradores o workarea). */
-function isEditableS3Artifact(p: WorkAreaFileProposal): boolean {
-  return isWorkareaS3Artifact(p) || isS3BorradorArtifact(p);
 }
 
 function workAreaProposalVisibleInWorkAreaPanel(p: WorkAreaFileProposal): boolean {
@@ -492,7 +486,6 @@ export function WorkspacePage() {
   /** Texto ya resuelto para borradores con marcadores DocViz (sin `<<<<<<<`). */
   const [workAreaResolvedDraft, setWorkAreaResolvedDraft] = useState<string | null>(null);
   /** Edición in-place de objetos ya en bucket workarea o borradores (S3). */
-  const [workAreaS3Editing, setWorkAreaS3Editing] = useState(false);
   const [workAreaS3EditDraft, setWorkAreaS3EditDraft] = useState("");
   /** Borrador .txt en el clon (no solo-S3): editor tras resolver conflictos o revisar texto antes de finalizar. */
   const [workAreaCloneDraftEditing, setWorkAreaCloneDraftEditing] = useState(false);
@@ -552,10 +545,10 @@ export function WorkspacePage() {
     });
   }, []);
 
-  const refreshWorkAreaS3List = useCallback(async () => {
+  const refreshWorkAreaS3List = useCallback(async (): Promise<WorkAreaFileProposal[]> => {
     const hu = taskContext?.huCode?.trim();
     const uid = connect?.usuario?.trim() || getUserId()?.trim();
-    if (!hu || !uid) return;
+    if (!hu || !uid) return [];
     const cell = taskContext?.cellLabel?.trim();
     try {
       const items = await fetchWorkAreaS3Artifacts(uid, hu, { taskHuCode: hu, cellLabel: cell });
@@ -572,9 +565,11 @@ export function WorkspacePage() {
         );
         return [...kept, ...mapped];
       });
+      return mapped;
     } catch {
       /* S3 deshabilitado o red */
     }
+    return [];
   }, [taskContext?.huCode, taskContext?.cellLabel, connect?.usuario]);
 
   /** Tras una respuesta de chat con propuestas: no fusionar JSON del WS; el objeto está en S3 tras el backend. */
@@ -616,11 +611,25 @@ export function WorkspacePage() {
   }, [workAreaNotice]);
 
   useEffect(() => {
-    setWorkAreaS3Editing(false);
     setWorkAreaS3EditDraft("");
     setWorkAreaCloneDraftEditing(false);
     setWorkAreaCloneDraftBuffer("");
+    setWorkAreaResolvedDraft(null);
   }, [workAreaSelectedId]);
+
+  const selectedS3BorradorPlainContent = useMemo(() => {
+    if (workAreaSelectedId == null) return undefined;
+    const pr = workAreaProposals.find((x) => x.id === workAreaSelectedId);
+    if (!pr || !isS3BorradorArtifact(pr)) return undefined;
+    return pr.content ?? "";
+  }, [workAreaSelectedId, workAreaProposals]);
+
+  /** Borrador S3 sin marcadores: sincroniza el textarea cuando cambia el contenido persistido (p. ej. tras resolver conflicto). */
+  useEffect(() => {
+    if (selectedS3BorradorPlainContent === undefined) return;
+    if (hasDocvizMergeMarkers(selectedS3BorradorPlainContent)) return;
+    setWorkAreaS3EditDraft(selectedS3BorradorPlainContent);
+  }, [workAreaSelectedId, selectedS3BorradorPlainContent]);
 
   useEffect(() => {
     if (workAreaPanelProposals.length > 0) return;
@@ -829,7 +838,6 @@ export function WorkspacePage() {
         workAreaDraftFetchKeysRef.current.clear();
         setWorkAreaProposals((prev) => prev.filter((x) => x.id !== p.id));
         setWorkAreaSelectedId((cur) => (cur === p.id ? null : cur));
-        setWorkAreaS3Editing(false);
         setWorkAreaS3EditDraft("");
         setWorkAreaNotice(`Eliminado de S3: ${p.fileName}`);
       } catch (e) {
@@ -868,24 +876,14 @@ export function WorkspacePage() {
     }
   }, [workAreaProposals, workAreaResolvedDraft, workAreaSelectedId, workAreaTaskHeaders]);
 
-  const startWorkAreaS3Edit = useCallback(() => {
-    const p = workAreaProposals.find((x) => x.id === workAreaSelectedId);
-    if (!p || !isEditableS3Artifact(p)) return;
-    let draft = p.content ?? "";
-    if (hasDocvizMergeMarkers(draft)) {
-      draft = workAreaResolvedDraft ?? buildResolvedDocvizMerge(draft, "theirs");
-    }
-    setWorkAreaS3EditDraft(draft);
-    setWorkAreaS3Editing(true);
-  }, [workAreaProposals, workAreaResolvedDraft, workAreaSelectedId]);
-
-  const cancelWorkAreaS3Edit = useCallback(() => {
-    setWorkAreaS3Editing(false);
-  }, []);
-
+  /** Borrador S3 → workarea (pgvector) y borra el objeto en borradores; la lista pasa a chip azul. */
   const saveWorkAreaS3Edit = useCallback(async () => {
     const p = workAreaProposals.find((x) => x.id === workAreaSelectedId);
-    if (!p?.s3ObjectKey?.trim() || !p.s3Bucket?.trim() || !isEditableS3Artifact(p)) return;
+    if (!p?.s3ObjectKey?.trim() || !p.s3Bucket?.trim()) return;
+    if (!isS3BorradorArtifact(p)) {
+      setWorkAreaErr("Guardar solo aplica a archivos en el bucket de borradores.");
+      return;
+    }
     const finalText = workAreaS3EditDraft;
     if (
       hasDocvizMergeMarkers(finalText) ||
@@ -897,49 +895,23 @@ export function WorkspacePage() {
     setWorkAreaErr(null);
     setWorkAreaKeepLoadingId(p.id);
     try {
-      if (isWorkareaS3Artifact(p)) {
-        const r = await saveWorkAreaS3WorkareaAndReindex(
-          { objectKey: p.s3ObjectKey, content: finalText },
-          workAreaTaskHeaders,
-        );
-        const uid = connect?.usuario?.trim() || getUserId()?.trim();
-        const stored = uid ? loadWorkspaceTaskContext(uid) : null;
-        const hu = taskContext?.huCode?.trim() || stored?.huCode?.trim();
-        const storagePath = `__s3_workarea__/${p.fileName}`;
-        if (uid && hu) {
-          saveWorkAreaIndexed(uid, hu, storagePath, r.chunksIndexed ?? 0);
-        }
-        setWorkAreaProposals((prev) =>
-          prev.map((x) =>
-            x.id === p.id
-              ? {
-                  ...x,
-                  content: finalText,
-                  vectorIndexed: true,
-                  lastIndexedChunks: r.chunksIndexed,
-                }
-              : x,
-          ),
-        );
-        setWorkAreaNotice(`Guardado en S3 y reindexado (${r.chunksIndexed ?? 0} fragmentos): ${p.fileName}`);
-      } else {
-        await saveWorkAreaS3BorradorContent(
-          { objectKey: p.s3ObjectKey, content: finalText },
-          workAreaTaskHeaders,
-        );
-        setWorkAreaProposals((prev) =>
-          prev.map((x) =>
-            x.id === p.id
-              ? {
-                  ...x,
-                  content: finalText,
-                }
-              : x,
-          ),
-        );
-        setWorkAreaNotice(`Borrador guardado en S3: ${p.fileName}`);
+      const r = await promoteWorkAreaBorradorToWorkarea(
+        { objectKey: p.s3ObjectKey, content: finalText },
+        workAreaTaskHeaders,
+      );
+      const uid = connect?.usuario?.trim() || getUserId()?.trim();
+      const stored = uid ? loadWorkspaceTaskContext(uid) : null;
+      const hu = taskContext?.huCode?.trim() || stored?.huCode?.trim();
+      const storagePath = `__s3_workarea__/${p.fileName}`;
+      if (uid && hu) {
+        saveWorkAreaIndexed(uid, hu, storagePath, r.chunksIndexed ?? 0);
       }
-      setWorkAreaS3Editing(false);
+      const mapped = await refreshWorkAreaS3List();
+      const sel = mapped.find(
+        (m) => m.fileName === p.fileName && m.s3Bucket && /workarea/i.test(m.s3Bucket),
+      );
+      if (sel) setWorkAreaSelectedId(sel.id);
+      setWorkAreaNotice(`En workarea (${r.chunksIndexed ?? 0} fragmentos indexados): ${p.fileName}`);
     } catch (e) {
       setWorkAreaErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -952,6 +924,7 @@ export function WorkspacePage() {
     workAreaTaskHeaders,
     connect?.usuario,
     taskContext?.huCode,
+    refreshWorkAreaS3List,
   ]);
 
   const onQuestionDrop = useCallback(
@@ -1015,6 +988,18 @@ export function WorkspacePage() {
   const [chatErr, setChatErr] = useState<string | null>(null);
 
   const [chatLoading, setChatLoading] = useState(false);
+
+  /** Evita que el refetch de historial (useEffect) pise `chatTurns` mientras hay stream o justo al terminar (Firestore aún vacío). */
+  const chatLoadingRef = useRef(false);
+  useEffect(() => {
+    chatLoadingRef.current = chatLoading;
+  }, [chatLoading]);
+
+  /**
+   * Concurrencia GET `/vector/chat/history`: `historyMutationGenRef` sube tras fusionar un turno RAG;
+   * los GET iniciados antes invalidan (no aplican) para no pisar la UI con [] u obsoleto.
+   */
+  const historyMutationGenRef = useRef(0);
 
   const chatFormRef = useRef<HTMLFormElement>(null);
 
@@ -1107,6 +1092,7 @@ export function WorkspacePage() {
             const local = prev.find((t) => t.id === streamId);
             return mergeFirestoreHistoryWithLocalStream(rows, local, prompt);
           });
+          historyMutationGenRef.current += 1;
         } catch {
           /* igual que onChat */
         }
@@ -1518,6 +1504,12 @@ export function WorkspacePage() {
   /**
    * Historial Firestore: no depende de la ingesta vectorial (índice RAG). Antes el chat quedaba vacío si
    * POST /vector/ingest fallaba o no terminaba; el historial debe cargarse con solo usuario + conversación.
+   * No incluir `chatLoading` en las dependencias: al pasar de true→false tras un RAG el efecto volvía a ejecutarse
+   * y `setChatTurns(entries)` podía sustituir el estado por [] o datos sin el último turno (latencia Firestore),
+   * borrando lo que el usuario acababa de ver ("parpadeo" / panel negro).
+   * Si la petición HTTP termina durante un stream, no aplicamos el resultado (`chatLoadingRef`).
+   * Tras `fetchChatHistory` en rama tarea: aplicar **antes** que `setResolvedPrimaryChatId`, si no el efecto se
+   * vuelve a ejecutar y puede invalidar el callback antes de fusionar filas en pantalla.
    */
   useEffect(() => {
     if (!getUserId()?.trim()) return;
@@ -1525,6 +1517,7 @@ export function WorkspacePage() {
     setChatHistoryHydrated(false);
     (async () => {
       try {
+        const mutationAtFetchStart = historyMutationGenRef.current;
         setChatHistoryErr(null);
         if (taskContext?.taskId != null && taskContext?.huCode?.trim()) {
           const { entries, resolvedConversationId } = await fetchChatHistory(50, {
@@ -1532,9 +1525,12 @@ export function WorkspacePage() {
             huCode: taskContext.huCode,
             ...(taskContext.cellLabel?.trim() ? { cellName: taskContext.cellLabel.trim() } : {}),
           });
-          if (!cancelled) {
+          if (!cancelled && !chatLoadingRef.current) {
+            setChatTurns((prev) => {
+              if (historyMutationGenRef.current !== mutationAtFetchStart) return prev;
+              return entries;
+            });
             if (resolvedConversationId) setResolvedPrimaryChatId(resolvedConversationId);
-            setChatTurns(entries);
           }
         } else {
           if (!chatConversationId) {
@@ -1542,7 +1538,12 @@ export function WorkspacePage() {
             return;
           }
           const { entries } = await fetchChatHistory(50, { conversationId: chatConversationId });
-          if (!cancelled) setChatTurns(entries);
+          if (!cancelled && !chatLoadingRef.current) {
+            setChatTurns((prev) => {
+              if (historyMutationGenRef.current !== mutationAtFetchStart) return prev;
+              return entries;
+            });
+          }
         }
       } catch (e) {
         if (!cancelled) {
@@ -2018,6 +2019,7 @@ export function WorkspacePage() {
           const local = prev.find((t) => t.id === streamId);
           return mergeFirestoreHistoryWithLocalStream(rows, local, q);
         });
+        historyMutationGenRef.current += 1;
 
       } catch (histErr) {
 
@@ -2032,6 +2034,7 @@ export function WorkspacePage() {
             localTurn(`local-${Date.now()}`, answer, sources),
           ];
         });
+        historyMutationGenRef.current += 1;
 
       }
 
@@ -2722,17 +2725,8 @@ export function WorkspacePage() {
                       >
                         <WorkAreaIconTrash />
                       </button>
-                      {isEditableS3Artifact(selectedWorkAreaProposal) ? (
-                        !workAreaS3Editing ? (
-                          <button
-                            type="button"
-                            className="btn"
-                            disabled={workAreaKeepLoadingId !== null}
-                            onClick={startWorkAreaS3Edit}
-                          >
-                            Editar
-                          </button>
-                        ) : (
+                      {isS3BorradorArtifact(selectedWorkAreaProposal) &&
+                        !hasDocvizMergeMarkers(selectedWorkAreaProposal.content ?? "") && (
                           <>
                             <button
                               type="button"
@@ -2740,18 +2734,19 @@ export function WorkspacePage() {
                               disabled={workAreaKeepLoadingId !== null}
                               onClick={() => void saveWorkAreaS3Edit()}
                             >
-                              {workAreaKeepLoadingId === selectedWorkAreaProposal.id
-                                ? "Guardando…"
-                                : isWorkareaS3Artifact(selectedWorkAreaProposal)
-                                  ? "Guardar y reindexar"
-                                  : "Guardar borrador en S3"}
+                              {workAreaKeepLoadingId === selectedWorkAreaProposal.id ? "Guardando…" : "Guardar"}
                             </button>
-                            <button type="button" className="btn" onClick={cancelWorkAreaS3Edit}>
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() =>
+                                setWorkAreaS3EditDraft(selectedWorkAreaProposal.content ?? "")
+                              }
+                            >
                               Cancelar
                             </button>
                           </>
-                        )
-                      ) : null}
+                        )}
                     </div>
                   )}
                 {!selectedWorkAreaProposal.artifactViewOnly && (
@@ -2763,6 +2758,7 @@ export function WorkspacePage() {
                           Cancelar edición
                         </button>
                       ) : (
+                        !hasDocvizMergeMarkers(selectedWorkAreaProposal.content ?? "") ? (
                         <button
                           type="button"
                           className="btn"
@@ -2771,6 +2767,7 @@ export function WorkspacePage() {
                         >
                           Editar texto
                         </button>
+                        ) : null
                       )}
                       <button
                         type="button"
@@ -2863,7 +2860,7 @@ export function WorkspacePage() {
                       </div>
                     );
                   }
-                  if (workAreaS3Editing && isEditableS3Artifact(p)) {
+                  if (isS3BorradorArtifact(p) && !hasDocvizMergeMarkers(p.content ?? "")) {
                     return (
                       <textarea
                         className="workspace__workarea-s3-editor"
@@ -2889,7 +2886,16 @@ export function WorkspacePage() {
                   if (p.content && p.content.trim().length > 0) {
                     if (hasDocvizMergeMarkers(p.content)) {
                       return (
-                        <WorkAreaConflictViewer text={p.content} onResolvedChange={onWorkAreaDocvizResolved} />
+                        <WorkAreaConflictViewer
+                          text={p.content}
+                          onResolvedChange={onWorkAreaDocvizResolved}
+                          onCommitResolution={(resolved) => {
+                            setWorkAreaProposals((prev) =>
+                              prev.map((x) => (x.id === p.id ? { ...x, content: resolved } : x)),
+                            );
+                            setWorkAreaResolvedDraft(resolved);
+                          }}
+                        />
                       );
                     }
                     if (hasGitConflictMarkers(p.content)) {
@@ -3100,7 +3106,14 @@ export function WorkspacePage() {
           <div className="chat-thread">
 
             {chatTurns.map((t, turnIdx) => {
-              const { entradaUsuario, promptFinal } = splitRagChatQuestion(t.question);
+              const { entradaUsuario } = splitRagChatQuestion(t.question);
+              const displayAnswer = formatChatAnswerForDisplay(t.answer);
+              const isLastTurn = turnIdx === chatTurns.length - 1;
+              const streamingLast = chatLoading && isLastTurn;
+              /** Durante el stream: si aún no hay caracteres en la respuesta cruda, mostrar Generando… */
+              const showGenerating = streamingLast && !(t.answer ?? "").trim();
+              /** Turno terminado sin texto visible (p. ej. falló RAG antes del stream o historial sin persistencia del assistant). */
+              const showEmptyResolved = !streamingLast && !displayAnswer.trim();
               return (
               <article
                 key={t.id}
@@ -3117,13 +3130,6 @@ export function WorkspacePage() {
 
                   <div className="chat-thread__question-user">{entradaUsuario}</div>
 
-                  {promptFinal ? (
-                    <details className="chat-thread__thinking">
-                      <summary className="chat-thread__thinking-summary">Pensando · instrucciones al modelo</summary>
-                      <pre className="chat-thread__thinking-pre">{promptFinal}</pre>
-                    </details>
-                  ) : null}
-
                 </div>
 
                 <div
@@ -3135,10 +3141,15 @@ export function WorkspacePage() {
 
                   <span className="chat-thread__label">Asistente</span>
 
-                  {t.answer || !chatLoading ? (
-                    <ChatMarkdown content={formatChatAnswerForDisplay(t.answer)} />
-                  ) : (
+                  {showGenerating ? (
                     <p className="muted small chat-thread__generating">Generando…</p>
+                  ) : showEmptyResolved ? (
+                    <p className="muted small">
+                      Sin respuesta visible en este turno. Si acabas de indexar, espera a que termine la ingesta; si ves un error
+                      de índice arriba, vuelve a indexar el repositorio o envía de nuevo la pregunta.
+                    </p>
+                  ) : (
+                    <ChatMarkdown content={displayAnswer} />
                   )}
 
                   {t.sources && t.sources.length > 0 && (

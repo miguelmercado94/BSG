@@ -232,7 +232,7 @@ public class VectorIngestService {
     }
 
     /**
-     * Borra todos los vectores del namespace del repo actual (equivalente a vaciar namespace en Pinecone).
+     * Borra todos los vectores del namespace del repo actual en PostgreSQL/pgvector.
      */
     public String clearCurrentNamespaceIndex() {
         if (!props.isEnabled()) {

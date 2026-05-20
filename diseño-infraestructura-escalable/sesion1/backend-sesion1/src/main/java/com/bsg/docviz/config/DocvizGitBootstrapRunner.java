@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * Opcional: al arrancar la app desde el {@code main}, ejecuta el mismo flujo que la UI
- * (conexión Git → ingesta a pgvector/Pinecone). Activar con {@code docviz.bootstrap.enabled=true}
+ * (conexión Git → ingesta a pgvector). Activar con {@code docviz.bootstrap.enabled=true}
  * y {@code docviz.bootstrap.git-url=...}.
  */
 @Component

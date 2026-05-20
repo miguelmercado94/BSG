@@ -36,6 +36,12 @@ export interface VectorIngestResponse {
   namespace: string;
 }
 
+/** POST /vector/work-area/s3-borrador-promote */
+export interface WorkAreaS3PromoteResponse extends VectorIngestResponse {
+  workareaBucket: string;
+  workareaObjectKey: string;
+}
+
 /** Respuesta de DELETE /vector/index */
 export interface VectorClearResponse {
   namespace: string;
@@ -163,8 +169,17 @@ export interface RagChatTurnResponse {
   proposals?: WorkAreaFileProposal[];
 }
 
+/** Referencia web asociada a un tag (GET /tags → toolsByTag). */
+export interface TagToolRefDto {
+  id: string;
+  title: string;
+  url: string;
+  hint?: string;
+}
+
 export interface TagsResponse {
   tags: string[];
+  toolsByTag?: Record<string, TagToolRefDto[]>;
 }
 
 /** Documentos de soporte (Markdown): cliente + opcionalmente S3/pgvector si el API está habilitado. */

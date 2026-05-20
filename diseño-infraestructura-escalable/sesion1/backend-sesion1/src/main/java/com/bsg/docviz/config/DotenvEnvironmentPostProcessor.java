@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 
 /**
  * Carga {@code .env} del directorio de trabajo (p. ej. {@code backend-sesion1/.env}) para que
- * {@code mvn spring-boot:run} vea {@code PINECONE_API_KEY} igual que Docker Compose con {@code env_file}.
+ * {@code mvn spring-boot:run} vea las mismas variables que Docker Compose con {@code env_file}.
  * No sustituye variables ya definidas en el SO ({@code System.getenv}).
  */
 public class DotenvEnvironmentPostProcessor implements EnvironmentPostProcessor {

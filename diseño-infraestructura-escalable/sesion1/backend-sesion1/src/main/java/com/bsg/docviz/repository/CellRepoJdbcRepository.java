@@ -69,6 +69,20 @@ public class CellRepoJdbcRepository {
         return list.isEmpty() ? Optional.empty() : Optional.of(list.getFirst());
     }
 
+    /** Primera fila activa con ese namespace vectorial (misma clave que usa el índice RAG). */
+    public Optional<CellRepoEntity> findFirstActiveByVectorNamespace(String vectorNamespace) {
+        if (vectorNamespace == null || vectorNamespace.isBlank()) {
+            return Optional.empty();
+        }
+        List<CellRepoEntity> list =
+                jdbc.query(
+                        SELECT_COLUMNS
+                                + " FROM docviz_cell_repo WHERE vector_namespace = ? AND active = true ORDER BY id ASC LIMIT 1",
+                        MAPPER,
+                        vectorNamespace.trim());
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.getFirst());
+    }
+
     /** Cualquier fila con la misma clave (hint o enlace entre células). */
     public Optional<CellRepoEntity> findFirstByRepositoryKey(String normalizedKey) {
         if (normalizedKey == null || normalizedKey.isBlank()) {

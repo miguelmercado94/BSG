@@ -1,5 +1,8 @@
 /**
- * Identificador de hilo en Firestore: `users/{uid}/conversations/{usuario_tarea_N}/messages`.
+ * Identificador de hilo en Firestore: `users/{uid}/conversations/{id}/messages`.
+ * Formato alineado con {@link com.bsg.docviz.context.ChatConversationIds} (backend):
+ * `{usuario}_{celula}_{HU}_{taskId}_{threadIndex}` — segmentos separados por `_` (no puntos).
+ * El índice vectorial (pgvector) usa el namespace del repo aparte; este id es solo para Firestore/historial del chat.
  * Coincide con la sanitización del backend (UserIdSanitizer).
  */
 const STORAGE_PREFIX = "docviz:chatConversationId:";

@@ -3,7 +3,7 @@ package com.bsg.docviz.vector;
 import java.util.List;
 
 /**
- * Persistencia y búsqueda de vectores (PostgreSQL/pgvector, Pinecone u otro).
+ * Persistencia y búsqueda de vectores (PostgreSQL/pgvector).
  */
 public interface VectorStore {
 

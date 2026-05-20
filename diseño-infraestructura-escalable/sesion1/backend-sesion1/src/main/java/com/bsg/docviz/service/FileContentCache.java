@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * Caché de contenido en RAM por ruta relativa: no se descarga el repo entero, solo archivos bajo demanda.
- * Por sesión hay dos instancias en {@link UserRepositoryState}: visualización/RAG vs ingesta Pinecone,
+ * Por sesión hay dos instancias en {@link UserRepositoryState}: visualización/RAG vs ingesta vectorial,
  * cada una con su propio techo de 100 MiB para que no compitan.
  * <p>
  * Límites: un archivo puede ocupar hasta {@link #MAX_SINGLE_FILE_BYTES}; la suma de todos los

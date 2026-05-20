@@ -30,14 +30,14 @@ server {
         add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
     }
 
-    # Cloud Map: DOCVIZ_UPSTREAM debe ir en variable — proxy_pass URL literal cachea IP al arrancar y tras redeploy ECS
-    # el backend cambia de IP → 502 «Host is unreachable». Variable + resolver fuerza re-resolución (valid=…).
+    # Cloud Map: solo el hostname en variable + resolver (no URL completa en proxy_pass → evita 500/502 raros en Nginx).
     location /api/ {
+        # set antes que rewrite ... break; si no, Nginx no aplica el set y proxy_pass ve el host vacío (500 "no host in upstream").
+        set $docviz_host "${DOCVIZ_PROXY_HOST}";
         rewrite ^/api/(.*)$ /docviz/$1 break;
-        set $docviz_upstream "${DOCVIZ_UPSTREAM}";
-        proxy_pass $docviz_upstream;
+        proxy_pass http://$docviz_host:${DOCVIZ_PROXY_PORT};
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $docviz_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -50,11 +50,11 @@ server {
     }
 
     location /security-api/ {
+        set $security_host "${SECURITY_PROXY_HOST}";
         rewrite ^/security-api/(.*)$ /security-auth/$1 break;
-        set $security_upstream "${SECURITY_UPSTREAM}";
-        proxy_pass $security_upstream;
+        proxy_pass http://$security_host:${SECURITY_PROXY_PORT};
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $security_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

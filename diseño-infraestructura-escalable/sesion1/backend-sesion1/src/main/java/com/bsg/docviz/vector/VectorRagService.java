@@ -8,8 +8,10 @@ import com.bsg.docviz.dto.TreeNodeDto;
 import com.bsg.docviz.dto.VectorChatResponse;
 import com.bsg.docviz.context.DocvizChatContext;
 import com.bsg.docviz.security.CurrentUser;
+import com.bsg.docviz.repository.CellRepoJdbcRepository;
 import com.bsg.docviz.service.ChatConversationPersistenceService;
 import com.bsg.docviz.service.DomainTaskService;
+import com.bsg.docviz.service.TagToolRegistry;
 import com.bsg.docviz.service.FileContentCache;
 import com.bsg.docviz.application.port.output.GitRepositoryPort;
 import com.bsg.docviz.application.port.output.SessionRegistryPort;
@@ -53,9 +55,11 @@ public class VectorRagService {
             "Eres un asistente técnico. Usa solo la información del contexto que recibes: fragmentos del repositorio "
                     + "(marcados con [Fuente: …]) y, si en ese bloque hay documentos de soporte, también esos.\n"
                     + "No inventes datos que no aparezcan ahí. Responde en español, claro y breve.\n\n"
-                    + "Para la petición del usuario: primero esboza un plan corto para resolver el enunciado. "
-                    + "Si la solución requiere tocar uno o más archivos (en el repo o en soporte), después del plan incluye "
-                    + "los cambios en un único bloque ```yaml con raíz proposals: (no uses JSON de propuestas).\n\n"
+                    + "Si la petición es solo informativa (explicar, listar, describir sin modificar archivos): "
+                    + "responde con un plan breve si ayuda y la explicación en markdown. NO incluyas bloque ```yaml ni proposals.\n\n"
+                    + "Solo si el usuario pide explícitamente crear, editar o borrar archivos del repositorio o de soporte: "
+                    + "después del plan o la explicación, incluye los cambios en un único bloque ```yaml con raíz proposals: "
+                    + "(no uses JSON de propuestas en ese bloque).\n\n"
                     + "path — prefijo obligatorio:\n"
                     + "- REPO/… → archivo del repositorio clonado (ruta relativa; el backend localiza el fichero y versiona "
                     + "borradores como _v1, _v2… sin que pongas el sufijo en path).\n"
@@ -63,6 +67,8 @@ public class VectorRagService {
                     + "versiona igual.\n\n"
                     + "Cada ítem: path, new (true solo si el archivo aún no existe en el repo), blocks: lista de ediciones con "
                     + "start y end (líneas 1-based), type REPLACE | NEW | DELETE, lines (strings; [] en DELETE).\n\n"
+                    + "Si el contexto incluye un bloque «Referencias web (@tools)», son URLs orientativas asociadas a los tags "
+                    + "del repositorio; puedes mencionarlas cuando ayuden (dependencias, docs externas), sin sustituir el código citado.\n\n"
                     + "Ejemplo:\n"
                     + "```yaml\n"
                     + "proposals:\n"
@@ -86,6 +92,8 @@ public class VectorRagService {
     private final ChatConversationPersistenceService chatConversationPersistence;
     private final DocvizChatProperties chatProperties;
     private final SupportS3Service supportS3Service;
+    private final CellRepoJdbcRepository cellRepoJdbcRepository;
+    private final TagToolRegistry tagToolRegistry;
 
     public VectorRagService(
             VectorProperties props,
@@ -97,6 +105,8 @@ public class VectorRagService {
             ChatClient chatClient,
             ChatConversationPersistenceService chatConversationPersistence,
             DocvizChatProperties chatProperties,
+            CellRepoJdbcRepository cellRepoJdbcRepository,
+            TagToolRegistry tagToolRegistry,
             @Autowired(required = false) SupportS3Service supportS3Service
     ) {
         this.props = props;
@@ -108,6 +118,8 @@ public class VectorRagService {
         this.chatClient = chatClient;
         this.chatConversationPersistence = chatConversationPersistence;
         this.chatProperties = chatProperties;
+        this.cellRepoJdbcRepository = cellRepoJdbcRepository;
+        this.tagToolRegistry = tagToolRegistry;
         this.supportS3Service = supportS3Service;
     }
 
@@ -204,12 +216,10 @@ public class VectorRagService {
 
         if (matches.isEmpty() && ctx.isEmpty()) {
             log.warn(
-                    "RAG: sin coincidencias en índice ni menciones resueltas (namespace={}, vectorUserLabel={})",
+                    "RAG: sin coincidencias en índice ni menciones resueltas; se continúa sin fragmentos (namespace={}, vectorUserLabel={})",
                     namespace,
                     vectorStoreUserLabel);
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                    "No hay coincidencias en el índice para esta pregunta. Indexa archivos con POST /vector/ingest, "
-                            + "o usa @[repo:ruta/al/archivo] / @[soporte:clave] en la pregunta.");
+            appendNoIndexedContextFallback(ctx);
         }
 
         for (VectorMatch m : matches) {
@@ -265,12 +275,20 @@ public class VectorRagService {
         }
 
         if (ctx.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "No se pudo reconstruir texto desde el índice. Vuelve a indexar.");
+            log.warn(
+                    "RAG: contexto vacío tras índice y menciones (chunks no reconstruibles u omitidos); fallback sin fragmentos");
+            appendNoIndexedContextFallback(ctx);
         }
 
         String repoContext = truncateRagContextIfNeeded(ctx.toString(), props.getRagMaxContextChars());
-        String userBlock = buildUserPromptWithOptionalHistory(conversationUserId, question, repoContext, rawUserUtterance);
+        String tagToolsAugment =
+                cellRepoJdbcRepository
+                        .findFirstActiveByVectorNamespace(namespace)
+                        .map(e -> tagToolRegistry.buildPromptAugmentationForTagsCsv(e.tagsCsv()))
+                        .orElse("");
+        String repoContextWithTools = repoContext + tagToolsAugment;
+        String userBlock =
+                buildUserPromptWithOptionalHistory(conversationUserId, question, repoContextWithTools, rawUserUtterance);
         return new RagPreparedContext(
                 question,
                 userBlock,
@@ -339,6 +357,20 @@ public class VectorRagService {
                 ctx.sources(),
                 ctx.repoLabel(),
                 DocvizChatContext.conversationIdOrDefault());
+    }
+
+    /**
+     * Cuando no hay chunks vectoriales ni menciones cargadas, el chat sigue disponible: el modelo recibe esta nota en lugar de fallar con 404.
+     */
+    private static void appendNoIndexedContextFallback(StringBuilder ctx) {
+        ctx.append(
+                "[DocViz — sin fragmentos indexados]\n"
+                        + "No hay trozos recuperados del índice vectorial para esta consulta (indexar el repo es opcional). "
+                        + "No hay contenido resuelto por menciones (@[repo:…], @[soporte:…]). "
+                        + "Responde lo mejor posible; puedes usar conocimiento general cuando aplique. "
+                        + "No inventes rutas ni contenido supuesto de este repositorio. "
+                        + "Si hace falta código concreto del proyecto, el usuario puede citar un archivo con @[repo:ruta/al/archivo] "
+                        + "o indexar cuando lo prefiera.\n\n");
     }
 
     /**
@@ -543,14 +575,12 @@ public class VectorRagService {
     }
 
     /**
-     * Si el usuario pide copia/sobrescritura o usa @[archivo], se fuerza la inclusión del JSON de propuestas (área de trabajo).
+     * Solo cuando el enunciado sugiere editar/copiar/versionar archivos. Las menciones {@code @[repo:…]} cargan contexto
+     * pero no implican borrador; no activar el requisito de YAML aquí (evita respuestas vacías de tipo proposals).
      */
     private static boolean questionImpliesFileProposal(String q) {
         if (q == null || q.isBlank()) {
             return false;
-        }
-        if (q.contains("@[")) {
-            return true;
         }
         String lower = q.toLowerCase(Locale.ROOT);
         if (lower.contains("sobrees") || lower.contains("sobrescrib") || lower.contains("sobreescrib")) {

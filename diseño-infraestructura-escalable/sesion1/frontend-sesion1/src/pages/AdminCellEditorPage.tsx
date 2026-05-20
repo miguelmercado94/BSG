@@ -29,6 +29,7 @@ import {
   fetchCellRepos,
   fetchCells,
   fetchTextFromPresignedUrl,
+  fetchTags,
   getUserId,
   isSupportRole,
   listSupportMarkdownObjects,
@@ -42,6 +43,7 @@ import type {
   FolderStructureDto,
   GitConnectionMode,
   SupportMarkdownObjectDto,
+  TagsResponse,
 } from "../types";
 
 type PendingIndexed = {
@@ -68,6 +70,28 @@ function summarizeSkippedPaths(skipped: string[] | undefined | null): string | n
   const max = 2;
   const head = skipped.slice(0, max).join("; ");
   return skipped.length > max ? `${head} (+${skipped.length - max} más)` : head;
+}
+
+function computeTagsCsv(preset: Set<string>, extraCsv: string): string {
+  const head = [...preset].sort((a, b) => a.localeCompare(b)).join(", ");
+  const t = extraCsv.trim();
+  if (!t) return head;
+  return head ? `${head}, ${t}` : t;
+}
+
+function splitTagsForCatalog(csv: string, catalogTags: string[]): { preset: Set<string>; extra: string } {
+  const catalogSet = new Set(catalogTags);
+  const parts = csv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const preset = new Set<string>();
+  const extraParts: string[] = [];
+  for (const p of parts) {
+    if (catalogSet.has(p)) preset.add(p);
+    else extraParts.push(p);
+  }
+  return { preset, extra: extraParts.join(", ") };
 }
 
 function toRepoBodyFromForm(p: {
@@ -193,6 +217,13 @@ export function AdminCellEditorPage() {
   const [repoDisplayName, setRepoDisplayName] = useState("");
   const [repoNamespace, setRepoNamespace] = useState("");
   const [repoTags, setRepoTags] = useState("");
+  /** Tags del catálogo GET /tags seleccionados como rombos. */
+  const [repoTagPresetSelected, setRepoTagPresetSelected] = useState<Set<string>>(() => new Set());
+  /** Etiquetas libres (no del catálogo), CSV. */
+  const [repoTagsExtra, setRepoTagsExtra] = useState("");
+  const [tagCatalog, setTagCatalog] = useState<TagsResponse | null>(null);
+  /** Evita sobrescribir tags antes de terminar GET /tags al abrir el panel. */
+  const [tagsCatalogReady, setTagsCatalogReady] = useState(false);
   const [repoUser, setRepoUser] = useState("");
   const [repoToken, setRepoToken] = useState("");
   const [hintReuse, setHintReuse] = useState(false);
@@ -273,6 +304,37 @@ export function AdminCellEditorPage() {
       setMdViewerTab("preview");
     }
   }, [viewer]);
+
+  useEffect(() => {
+    if (!showRepoForm) {
+      setTagsCatalogReady(false);
+      return;
+    }
+    let cancelled = false;
+    void fetchTags()
+      .then((res) => {
+        if (cancelled) return;
+        setTagCatalog(res);
+        const { preset, extra } = splitTagsForCatalog(repoTags, res.tags);
+        setRepoTagPresetSelected(preset);
+        setRepoTagsExtra(extra);
+        setRepoTags(computeTagsCsv(preset, extra));
+        setTagsCatalogReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setTagsCatalogReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Solo al abrir el panel; repoTags es la instantánea de ese render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshot intencional al abrir «Agregar repositorio»
+  }, [showRepoForm]);
+
+  useEffect(() => {
+    if (!showRepoForm || !tagsCatalogReady) return;
+    setRepoTags(computeTagsCsv(repoTagPresetSelected, repoTagsExtra));
+  }, [repoTagPresetSelected, repoTagsExtra, showRepoForm, tagsCatalogReady]);
 
   useEffect(() => {
     if (!getUserId().trim()) {
@@ -510,6 +572,8 @@ export function AdminCellEditorPage() {
         setRepoDisplayName("");
         setRepoNamespace("");
         setRepoTags("");
+        setRepoTagPresetSelected(new Set());
+        setRepoTagsExtra("");
         setRepoToken("");
         setHintReuse(false);
         setRepoDefaultBranch("");
@@ -568,6 +632,8 @@ export function AdminCellEditorPage() {
       setRepoDisplayName("");
       setRepoNamespace("");
       setRepoTags("");
+      setRepoTagPresetSelected(new Set());
+      setRepoTagsExtra("");
       setRepoToken("");
       setHintReuse(false);
       setRepoDefaultBranch("");
@@ -1125,10 +1191,6 @@ export function AdminCellEditorPage() {
                       )}
                     </label>
                     <label className="field">
-                      <span>Etiquetas (CSV, opcional)</span>
-                      <input value={repoTags} onChange={(ev) => setRepoTags(ev.target.value)} placeholder="main, docs" />
-                    </label>
-                    <label className="field">
                       <span>Namespace vectorial</span>
                       <input
                         className="admin-repo-form__auto-field"
@@ -1136,6 +1198,54 @@ export function AdminCellEditorPage() {
                         readOnly
                         tabIndex={-1}
                         placeholder="Se genera al completar la URL"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Etiquetas (catálogo)</span>
+                      <p className="muted small" style={{ margin: "0 0 0.5rem" }}>
+                        Rombo = uno o varios; opcional: otras etiquetas debajo. El backend usa estos tags para sugerir URLs de
+                        documentación (@tools) en el chat RAG.
+                      </p>
+                      <div
+                        className="admin-repo-form__tag-rhombs"
+                        role="group"
+                        aria-label="Etiquetas del catálogo DocViz"
+                      >
+                        {(tagCatalog?.tags ?? []).map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            className={
+                              "admin-repo-form__tag-rhomb" +
+                              (repoTagPresetSelected.has(tag) ? " admin-repo-form__tag-rhomb--on" : "")
+                            }
+                            title={
+                              tagCatalog?.toolsByTag?.[tag]
+                                ?.map((t) => `${t.title} (${t.url})`)
+                                .join(" · ") ?? tag
+                            }
+                            aria-pressed={repoTagPresetSelected.has(tag)}
+                            onClick={() => {
+                              setRepoTagPresetSelected((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(tag)) next.delete(tag);
+                                else next.add(tag);
+                                return next;
+                              });
+                            }}
+                          >
+                            <span className="admin-repo-form__tag-rhomb-inner">{tag}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </label>
+                    <label className="field">
+                      <span>Otras etiquetas (CSV, opcional)</span>
+                      <input
+                        value={repoTagsExtra}
+                        onChange={(ev) => setRepoTagsExtra(ev.target.value)}
+                        placeholder="ej. docs-internos, kotlin"
+                        autoComplete="off"
                       />
                     </label>
                     <button

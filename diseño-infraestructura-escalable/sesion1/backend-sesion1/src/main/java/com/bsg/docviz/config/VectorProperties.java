@@ -6,36 +6,27 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class VectorProperties {
 
     /**
-     * Almacén de vectores: {@code pgvector} (PostgreSQL + extensión pgvector) o {@code pinecone} (API HTTP legada).
+     * Almacén de vectores: solo {@code pgvector} (PostgreSQL + extensión pgvector).
      */
     private String store = "pgvector";
 
     /**
-     * Origen de los vectores de embedding: {@code spring-ollama} (Spring AI + Ollama, recomendado con pgvector) o
-     * {@code pinecone-inference} (API HTTP de inferencia Pinecone; requiere PINECONE_API_KEY).
+     * Origen de embeddings: {@code spring-ollama} (Spring AI + Ollama, típico en local) o
+     * {@code spring-ai} (OpenAI u otro proveedor Spring AI en develop/pdn).
      */
     private String embeddingsProvider = "spring-ollama";
 
     /**
      * Dimensión del vector de embedding (debe coincidir con el modelo; p. ej. nomic-embed-text → 768).
-     * Solo aplica a {@code store=pgvector} (DDL de la columna {@code vector(dim)}).
+     * DDL de la columna {@code vector(dim)} en PostgreSQL.
      */
     private int embeddingDimensions = 768;
 
     private boolean enabled = true;
-    private String pineconeApiKey = "";
-    private String pineconeIndexName = "docviz-embed";
-    private String pineconeIndexHost = "";
-    /**
-     * Host de la API de inferencia (embeddings). No es el host del índice de datos.
-     * @see <a href="https://docs.pinecone.io/reference/api/2025-10/inference/generate-embeddings">Generate embeddings</a>
-     */
-    private String pineconeInferenceHost = "api.pinecone.io";
-    private String pineconeEmbedModel = "llama-text-embed-v2";
     private long embedBatchDelayMs = 2500;
     /**
-     * Cuántos chunks de texto van en una sola petición HTTP a Pinecone {@code /embed} (menos llamadas = más rápido).
-     * Ajusta si la API devuelve error por payload o rate limit.
+     * Cuántos chunks de texto se procesan por lote en la ingesta (menos lotes = más rápido).
+     * Ajusta si hay errores por payload o límites del modelo.
      */
     private int embedChunkBatchSize = 32;
     /**
@@ -54,7 +45,7 @@ public class VectorProperties {
     private int ragMaxContextChars = 12000;
     /**
      * Si es true, la ingesta solo indexa {@link #classpathSampleResource} desde el classpath (sin leer el repo Git).
-     * Útil para depurar Pinecone/embeddings. Desactivar para indexar todo el repositorio.
+     * Útil para depurar embeddings/ingesta. Desactivar para indexar todo el repositorio.
      */
     private boolean ingestClasspathSampleOnly = false;
     /** Ruta bajo {@code src/main/resources} (p. ej. un .py de prueba para ingesta mínima). */
@@ -65,7 +56,7 @@ public class VectorProperties {
     }
 
     public void setStore(String store) {
-        this.store = store != null ? store.trim().toLowerCase() : "pgvector";
+        this.store = "pgvector";
     }
 
     public String getEmbeddingsProvider() {
@@ -73,8 +64,8 @@ public class VectorProperties {
     }
 
     public void setEmbeddingsProvider(String embeddingsProvider) {
-        this.embeddingsProvider =
-                embeddingsProvider != null ? embeddingsProvider.trim().toLowerCase() : "spring-ollama";
+        String e = embeddingsProvider != null ? embeddingsProvider.trim().toLowerCase() : "spring-ollama";
+        this.embeddingsProvider = "spring-ai".equals(e) ? "spring-ai" : "spring-ollama";
     }
 
     public int getEmbeddingDimensions() {
@@ -97,46 +88,6 @@ public class VectorProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
-    }
-
-    public String getPineconeApiKey() {
-        return pineconeApiKey;
-    }
-
-    public void setPineconeApiKey(String pineconeApiKey) {
-        this.pineconeApiKey = pineconeApiKey;
-    }
-
-    public String getPineconeIndexName() {
-        return pineconeIndexName;
-    }
-
-    public void setPineconeIndexName(String pineconeIndexName) {
-        this.pineconeIndexName = pineconeIndexName;
-    }
-
-    public String getPineconeIndexHost() {
-        return pineconeIndexHost;
-    }
-
-    public void setPineconeIndexHost(String pineconeIndexHost) {
-        this.pineconeIndexHost = pineconeIndexHost;
-    }
-
-    public String getPineconeInferenceHost() {
-        return pineconeInferenceHost;
-    }
-
-    public void setPineconeInferenceHost(String pineconeInferenceHost) {
-        this.pineconeInferenceHost = pineconeInferenceHost;
-    }
-
-    public String getPineconeEmbedModel() {
-        return pineconeEmbedModel;
-    }
-
-    public void setPineconeEmbedModel(String pineconeEmbedModel) {
-        this.pineconeEmbedModel = pineconeEmbedModel;
     }
 
     public long getEmbedBatchDelayMs() {

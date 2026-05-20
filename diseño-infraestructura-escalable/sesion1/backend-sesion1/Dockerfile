@@ -13,7 +13,7 @@ WORKDIR /app
 COPY target/backend-sesion1-*.jar /app/app.jar
 
 # Empaquetar las credenciales de Firebase dentro del contenedor
-COPY sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json /app/
+COPY bsg-sesion1-firebase-adminsdk-fbsvc-137f14c279.json /app/
 
 EXPOSE 8080
 

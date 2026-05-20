@@ -3,37 +3,36 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildResolvedDocvizMerge,
   hasDocvizMergeMarkers,
-  MARKER_DIV,
-  MARKER_OURS,
-  MARKER_THEIRS,
   parseDocvizMerge,
 } from "../lib/docvizConflictMarkers";
 
-type Choice = "ours" | "theirs" | "both";
+type Choice = "ours" | "theirs";
 
 type Props = {
   text: string;
-  /** Contenido del archivo listo para escribir en el clon (sin marcadores). */
+  /** Texto resuelto para guardar (buffer por defecto «propuesto»). */
   onResolvedChange: (resolvedFileText: string) => void;
+  /** Solo al pulsar «Aceptar del repositorio» o «Aceptar propuesto»: sustituye el borrador en el padre y quita marcadores. */
+  onCommitResolution?: (resolvedFileText: string) => void;
 };
 
 /**
- * Vista estilo editor (similar a VS Code): bloques coloreados para repositorio vs propuesto y acciones por conflicto.
+ * Solo dos paneles antes de elegir: propuesta (azul, arriba) y repositorio (verde, abajo).
+ * Tras elegir, el padre sustituye `content` sin marcadores → vista única plana y edición habilitada allí.
  */
-export function WorkAreaConflictViewer({ text, onResolvedChange }: Props) {
+export function WorkAreaConflictViewer({ text, onResolvedChange, onCommitResolution }: Props) {
   const parsed = useMemo(() => parseDocvizMerge(text), [text]);
   const [choice, setChoice] = useState<Choice>("theirs");
-  /** Evita resetear la elección del usuario en cada re-render si el contenido es el mismo valor. */
   const prevMarkersBlobRef = useRef<string | null>(null);
-
-  const resolvedPreview = useMemo(() => buildResolvedDocvizMerge(text, choice), [text, choice]);
 
   const applyChoice = useCallback(
     (c: Choice) => {
       setChoice(c);
-      onResolvedChange(buildResolvedDocvizMerge(text, c));
+      const resolved = buildResolvedDocvizMerge(text, c);
+      onResolvedChange(resolved);
+      onCommitResolution?.(resolved);
     },
-    [text, onResolvedChange],
+    [text, onResolvedChange, onCommitResolution],
   );
 
   useEffect(() => {
@@ -59,7 +58,7 @@ export function WorkAreaConflictViewer({ text, onResolvedChange }: Props) {
   }
 
   return (
-    <div className="work-area-conflict" role="region" aria-label="Conflicto de merge DocViz">
+    <div className="work-area-conflict" role="region" aria-label="Comparar propuesta y repositorio">
       <div className="work-area-conflict__toolbar">
         <button
           type="button"
@@ -78,38 +77,22 @@ export function WorkAreaConflictViewer({ text, onResolvedChange }: Props) {
         >
           Aceptar propuesto
         </button>
-        <span className="work-area-conflict__toolbar-sep" aria-hidden>
-          |
-        </span>
-        <button
-          type="button"
-          className={`work-area-conflict__toolbar-btn${choice === "both" ? " work-area-conflict__toolbar-btn--active" : ""}`}
-          onClick={() => applyChoice("both")}
-        >
-          Aceptar ambos
-        </button>
       </div>
 
-      <div className="work-area-conflict__preview-hint muted small" role="status">
-        Texto que se usará al guardar o descargar (cambia al pulsar arriba). Luego usa «Editar» en la barra para afinar y
-        guardar.
+      <div className="work-area-conflict__hint muted small" role="status">
+        Arriba la propuesta del modelo; abajo el texto del repositorio. Al elegir una opción verás solo el resultado y
+        podrás editar o guardar desde la barra.
       </div>
-      <pre className="work-area-conflict__preview-body" spellCheck={false}>
-        {resolvedPreview}
-      </pre>
 
-      <div className="work-area-conflict__marker work-area-conflict__marker--start">{MARKER_OURS}</div>
-      <pre className="work-area-conflict__block work-area-conflict__block--ours" spellCheck={false}>
-        {parsed.original}
-      </pre>
-
-      <div className="work-area-conflict__marker work-area-conflict__marker--mid">{MARKER_DIV}</div>
-
+      <div className="work-area-conflict__caption work-area-conflict__caption--theirs">Propuesta</div>
       <pre className="work-area-conflict__block work-area-conflict__block--theirs" spellCheck={false}>
         {parsed.revised}
       </pre>
 
-      <div className="work-area-conflict__marker work-area-conflict__marker--end">{MARKER_THEIRS}</div>
+      <div className="work-area-conflict__caption work-area-conflict__caption--ours">Repositorio (original)</div>
+      <pre className="work-area-conflict__block work-area-conflict__block--ours" spellCheck={false}>
+        {parsed.original}
+      </pre>
     </div>
   );
 }

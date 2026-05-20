@@ -191,7 +191,7 @@ public class DomainCellService {
     }
 
     /**
-     * Quita embeddings pgvector/Pinecone y objetos de soporte en S3 asociados al namespace del repo
+     * Quita embeddings pgvector y objetos de soporte en S3 asociados al namespace del repo
      * (misma lógica que {@link #deleteRepo(long, long)} antes de borrar la fila).
      */
     private void clearIndexedArtifactsForRepo(CellRepoEntity existing) {

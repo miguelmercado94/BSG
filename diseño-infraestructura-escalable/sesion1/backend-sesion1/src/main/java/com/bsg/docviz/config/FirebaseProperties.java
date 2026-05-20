@@ -13,7 +13,7 @@ public class FirebaseProperties {
      */
     private boolean enabled = false;
 
-    private String projectId = "sesion-bsg";
+    private String projectId = "bsg-sesion1";
 
     /**
      * Ruta al JSON de la cuenta de servicio. Si está vacío, se usa la variable de entorno {@code GOOGLE_APPLICATION_CREDENTIALS}.

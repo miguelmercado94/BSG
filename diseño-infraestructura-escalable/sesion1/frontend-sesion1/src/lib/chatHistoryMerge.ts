@@ -9,10 +9,22 @@ export function mergeFirestoreHistoryWithLocalStream(
   local: ChatHistoryEntry | undefined,
   question: string,
 ): ChatHistoryEntry[] {
-  if (!local?.answer?.trim()) {
+  if (!local) return rows;
+
+  const localAns = local.answer?.trim() ?? "";
+  const last = rows.length > 0 ? rows[rows.length - 1] : undefined;
+
+  /** Sin texto en cliente pero puede haber solo propuestas / persistencia Firestore aún vacía. */
+  if (!localAns) {
+    if (!last || last.question !== question) {
+      return [...rows, local];
+    }
+    if (!(last.answer?.trim())) {
+      return [...rows.slice(0, -1), local];
+    }
     return rows;
   }
-  const last = rows.length > 0 ? rows[rows.length - 1] : undefined;
+
   if (!last || last.question !== question) {
     return [...rows, local];
   }

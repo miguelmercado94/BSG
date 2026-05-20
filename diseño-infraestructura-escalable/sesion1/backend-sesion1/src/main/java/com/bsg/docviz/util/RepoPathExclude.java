@@ -67,10 +67,17 @@ public final class RepoPathExclude {
         }
         // Wrappers y metadatos de build (no fuente)
         String lower = n.toLowerCase(Locale.ROOT);
-        if (lower.endsWith("/mvnw")
+        if (lower.equals("mvnw")
+                || lower.equals("mvnw.cmd")
+                || lower.equals("gradlew")
+                || lower.equals("gradlew.bat")
+                || lower.endsWith("/mvnw")
                 || lower.endsWith("/mvnw.cmd")
                 || lower.endsWith("/gradlew")
                 || lower.endsWith("/gradlew.bat")) {
+            return true;
+        }
+        if (lower.startsWith(".mvn/") || lower.contains("/.mvn/")) {
             return true;
         }
         if (lower.endsWith("/meta-inf/manifest.mf")) {

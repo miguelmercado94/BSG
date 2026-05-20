@@ -11,7 +11,7 @@ public class WebConfig {
 
     /**
      * Sin esto, POST /vector/ingest/stream cae en AsyncRequestTimeoutException (~30s por defecto)
-     * mientras la ingesta a Pinecone sigue activa.
+     * mientras la ingesta vectorial sigue activa.
      */
     @Bean
     public WebMvcConfigurer asyncRequestTimeoutConfigurer() {

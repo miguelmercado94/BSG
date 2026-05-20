@@ -64,7 +64,7 @@ En Railway: crea **dos servicios** desde el mismo repositorio y en cada uno indi
 
 | `GEMINI_MODEL`                | Opcional. Por defecto: `gemini-2.5-flash` (`application-develop.properties`) |
 
-| `PINECONE_API_KEY`            | Necesaria para ingesta RAG y Pinecone cuando corresponda |
+| `DATABASE_URL` / credenciales PostgreSQL | Necesarias para RAG con pgvector en producción |
 
 | `PORT`                        | Railway lo inyecta; no hace falta fijarlo manualmente |
 
@@ -150,7 +150,7 @@ El backend permite orígenes `https://*.up.railway.app` (ver `WebConfig.java`). 
 
 
 
-- [ ] Backend: `SPRING_PROFILES_ACTIVE=develop`, `GEMINI_API_KEY`, `PINECONE_API_KEY` (u Ollama si usas `local`)
+- [ ] Backend: `SPRING_PROFILES_ACTIVE=develop`, `GEMINI_API_KEY`, PostgreSQL/pgvector configurado (u Ollama si usas `local`)
 
 - [ ] Frontend: `BACKEND_URL=https://…` y `SECURITY_URL=https://…/security-auth` (o build-args `VITE_*` equivalentes)
 
