@@ -1,0 +1,53 @@
+spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: https://api.openai.com
+      chat:
+        base-url: https://api.openai.com
+        api-key: ${OPENAI_API_KEY:}
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+          max-completion-tokens: 8192
+      embedding:
+        base-url: https://api.openai.com
+        api-key: ${OPENAI_API_KEY:}
+        options:
+          model: text-embedding-3-small
+          dimensions: ${SOPORTE_RAG_VECTOR_EMBEDDING_DIM:768}
+    model:
+      chat: openai
+      embedding:
+        text: openai
+  data:
+    redis:
+      host: ${REDIS_HOST:}
+      port: ${REDIS_PORT:6379}
+      ssl:
+        enabled: ${REDIS_SSL:false}
+  datasource:
+    hikari:
+      maximum-pool-size: ${HIKARI_MAX_POOL:12}
+      minimum-idle: ${HIKARI_MIN_IDLE:2}
+
+soporte-rag:
+  vector:
+    embeddings-provider: spring-ai
+    embedding-dimensions: ${SOPORTE_RAG_VECTOR_EMBEDDING_DIM:768}
+  almacenamiento:
+    s3:
+      endpoint: ""
+      presign-endpoint: ""
+      access-key: ""
+      secret-key: ""
+      bucket-soporte: ${SOPORTE_RAG_S3_BUCKET_SOPORTE:bsg-docviz-soporte-env}
+      bucket-borradores: ${SOPORTE_RAG_S3_BUCKET_BORRADORES:bsg-docviz-borradores-env}
+      bucket-workarea: ${SOPORTE_RAG_S3_BUCKET_WORKAREA:bsg-docviz-workarea-env}
+  cache:
+    redis:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.bsg.soporterag: INFO

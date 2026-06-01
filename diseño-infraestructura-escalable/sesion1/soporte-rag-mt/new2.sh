@@ -1,0 +1,1 @@
+docker exec -it ollama-service ollama pull nomic-embed-text

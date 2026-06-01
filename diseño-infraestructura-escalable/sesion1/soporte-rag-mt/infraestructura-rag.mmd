@@ -1,0 +1,79 @@
+graph TB
+    %% Estilos de Paleta de Colores
+    classDef adminStyle fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#fff;
+    classDef soporteStyle fill:#0f766e,stroke:#2dd4bf,stroke-width:2px,color:#fff;
+    classDef coreStyle fill:#d97706,stroke:#f59e0b,stroke-width:2px,color:#fff;
+    classDef databaseStyle fill:#4d7c0f,stroke:#84cc16,stroke-width:2px,color:#fff;
+    classDef webStyle fill:#6d28d9,stroke:#a855f7,stroke-width:2px,color:#fff;
+
+    %% --- MÓDULO DE ENTRADA (ADMINISTRADOR) ---
+    subgraph MOD_ADMIN ["1. MÓDULO DE ADMINISTRACIÓN & GOBERNANZA"]
+        Admin([👤 Rol: Administrador / Líder])
+        Celulas[📦 Células de Trabajo]
+        Repos[📁 Repositorios Git Públicos]
+        DocsMD[📝 Soportes Casuísticas .md]
+        Tags[🏷️ Etiquetas Tecnológicas<br>Java, Python, etc.]
+
+        Admin -->|Crea & Gestiona| Celulas
+        Celulas -->|Relación N:M| Repos
+        Repos -->|Asigna| Tags
+        Repos -->|Contiene| DocsMD
+    end
+    class Admin,Celulas,Repos,DocsMD,Tags adminStyle;
+
+    %% --- PIPELINE DE INGESTIÓN & VECTORIZACIÓN ---
+    subgraph PIPELINE ["2. PIPELINE DE INGESTIÓN (Embeddings)"]
+        ChunkGit[✂️ Fragmentación de Código]
+        ChunkMD[✂️ Fragmentación de Texto]
+        EmbedEngine[🧠 Motor de Embeddings]
+
+        Repos -->|Sincroniza| ChunkGit
+        DocsMD -->|Lee| ChunkMD
+        ChunkGit --> EmbedEngine
+        ChunkMD --> EmbedEngine
+    end
+    class ChunkGit,ChunkMD,EmbedEngine coreStyle;
+
+    %% --- PERSISTENCIA (POSTGRESQL + PGVECTOR) ---
+    subgraph DB_VECTORIAL ["3. ALMACENAMIENTO VECTORIAL (PostgreSQL)"]
+        TableMD[(🎯 Tabla pgvector: Principal<br>Contexto: Soluciones .md)]
+        TableGit[(💻 Tabla pgvector: Secundaria<br>Contexto: Código Fuente)]
+
+        EmbedEngine -->|Persiste Chunks .md| TableMD
+        EmbedEngine -->|Persiste Chunks Git| TableGit
+    end
+    class TableMD,TableGit databaseStyle;
+
+    %% --- MÓDULO DE CONSUMO (SOPORTE) ---
+    subgraph MOD_SOPORTE ["4. FLUJO DEL AGENTE DE SOPORTE & ENGINE RAG"]
+        SoporteAgent([👥 Rol: Agente de Soporte])
+        Tareas[📋 Tareas Asignadas]
+        ChatRAG[💬 Chat de Asistencia RAG]
+        LLM[🤖 Orquestador LLM / Prompt]
+
+        SoporteAgent -->|Gestiona e interactúa| Tareas
+        Tareas -->|Asociadas a| Celulas
+        SoporteAgent -->|Consulta Casuística| ChatRAG
+
+        %% Flujo del Motor RAG de Recuperación
+        ChatRAG -->|1. Recupera Prioritaria| TableMD
+        ChatRAG -->|2. Recupera Apoyo| TableGit
+
+        TableMD -->|Contexto 1°| LLM
+        TableGit -->|Contexto 2°| LLM
+        LLM -->|Genera Respuesta Inteligente| ChatRAG
+    end
+    class SoporteAgent,Tareas,ChatRAG,LLM soporteStyle;
+
+    %% --- ENRIQUECIMIENTO DINÁMICO ---
+    subgraph ENRIQUECIMIENTO ["5. ENRIQUECIMIENTO EXTERNO"]
+        WebHub[🌐 Hub de Páginas Web Habilitadas<br>Docs Oficiales / Manuales]
+
+        Tags -->|Habilita dinámicamente| WebHub
+        WebHub -->|Consulta Detalle Técnico| SoporteAgent
+    end
+    class WebHub webStyle;
+
+    %% Enlaces entre secciones mayores para dar flujo a la infografía
+    MOD_ADMIN -.-> PIPELINE
+    DB_VECTORIAL -.-> MOD_SOPORTE

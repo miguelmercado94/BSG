@@ -1,0 +1,75 @@
+server:
+  port: ${PORT:8090}
+
+spring:
+  application:
+    name: soporte-rag-mt
+  threads:
+    virtual:
+      enabled: true
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  config:
+    import: optional:file:./application-local.yml
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/soporte_rag}
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:2s}
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/rag_db}
+    username: ${DATABASE_USER:rag_user}
+    password: ${DATABASE_PASSWORD:rag_password}
+
+soporte-rag:
+  vector:
+    embedding-dimensions: ${SOPORTE_RAG_VECTOR_EMBEDDING_DIM:768}
+    rag-top-k: ${SOPORTE_RAG_RAG_TOP_K:6}
+    chunk-size: ${SOPORTE_RAG_CHUNK_SIZE:800}
+    chunk-overlap: ${SOPORTE_RAG_CHUNK_OVERLAP:120}
+    embeddings-provider: ${SOPORTE_RAG_EMBEDDINGS_PROVIDER:spring-ollama}
+    tabla-git: ${SOPORTE_RAG_VECTOR_TABLA_GIT:soporte_rag_git_chunk}
+    tabla-soporte: ${SOPORTE_RAG_VECTOR_TABLA_SOPORTE:soporte_rag_soporte_chunk}
+  almacenamiento:
+    s3:
+      enabled: ${SOPORTE_RAG_S3_ENABLED:true}
+      region: ${SOPORTE_RAG_S3_REGION:us-east-1}
+      endpoint: ${SOPORTE_RAG_S3_ENDPOINT:}
+      presign-endpoint: ${SOPORTE_RAG_S3_PRESIGN_ENDPOINT:}
+      access-key: ${AWS_ACCESS_KEY_ID:}
+      secret-key: ${AWS_SECRET_ACCESS_KEY:}
+      bucket-soporte: ${SOPORTE_RAG_S3_BUCKET_SOPORTE:${DOCVIZ_SUPPORT_S3_BUCKET:soporte}}
+      bucket-borradores: ${SOPORTE_RAG_S3_BUCKET_BORRADORES:${DOCVIZ_WORKSPACE_S3_BORRADOR_BUCKET:borradores}}
+      bucket-workarea: ${SOPORTE_RAG_S3_BUCKET_WORKAREA:${DOCVIZ_WORKSPACE_S3_WORKAREA_BUCKET:workarea}}
+      soporte-repo-prefix-template: "{repoSlug}/"
+      soporte-session-prefix-template: "_session/"
+      borradores-prefix-template: "{userId}/{taskCode}/"
+      workarea-prefix-template: "{userId}/{taskCode}/"
+      presigned-url-ttl-seconds: ${SOPORTE_RAG_S3_PRESIGN_TTL_SECONDS:3600}
+  cache:
+    redis:
+      enabled: ${SOPORTE_RAG_REDIS_ENABLED:false}
+      key-prefix: ${SOPORTE_RAG_REDIS_KEY_PREFIX:soporte-rag:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.bsg.soporterag: INFO

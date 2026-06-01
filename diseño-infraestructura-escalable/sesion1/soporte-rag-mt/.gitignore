@@ -1,0 +1,12 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.properties
+.idea/
+*.iml
+.vscode/
+*.class
+*.log
+.env
+application-local.properties
+.terraform/
+*.tfstate*

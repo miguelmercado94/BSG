@@ -1,0 +1,21 @@
+# Configuración para el perfil 'local'
+spring:
+  ai:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${OLLAMA_CHAT_MODEL:llama2:7b}
+      embedding:
+        options:
+          model: ${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/soporte_rag}
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/rag_db}
+
+soporte-rag:
+  almacenamiento:
+    s3:
+      endpoint: ${SOPORTE_RAG_S3_ENDPOINT:http://localhost:4566}

@@ -1,0 +1,226 @@
+<mxfile host="Electron" agent="Cursor">
+  <diagram name="soporte-rag-mt-modelo" id="srm-modelo">
+    <mxGraphModel dx="1209" dy="596" grid="1" gridSize="10" guides="1" tooltips="1" connect="0" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="lbl-dominio" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=14;" value="&lt;b&gt;Dominio&lt;/b&gt; — com.bsg.soporterag.dominio.modelo" vertex="1">
+          <mxGeometry height="30" width="420" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lbl-mongo" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=14;" value="&lt;b&gt;MongoDB&lt;/b&gt; — …adaptador.persistencia.mongodb.documento" vertex="1">
+          <mxGeometry height="30" width="520" x="600" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-DocumentoSoporte" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="DocumentoSoporte" vertex="1">
+          <mxGeometry height="198" width="240" x="1130" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-DocumentoSoporte-attr" parent="cls-DocumentoSoporte" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- id: String&lt;br&gt;- codigoSoporte: String&lt;br&gt;- nombre: String&lt;br&gt;- descripcion: String&lt;br&gt;- namespaceVectorial: String&lt;br&gt;- urlBucketS3: String&lt;div&gt;- bucketRol: RolBucketS3&lt;br&gt;- indexado: boolean&lt;br&gt;- actualizadoEn: Instant&lt;/div&gt;" vertex="1">
+          <mxGeometry height="170" width="240" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-FragmentoVectorial" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="FragmentoVectorial" vertex="1">
+          <mxGeometry height="138" width="240" x="90" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-FragmentoVectorial-attr" parent="cls-FragmentoVectorial" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- id: String&#xa;- namespace: String&#xa;- fuente: String&#xa;- indiceFragmento: int&#xa;- embedding: float[]" vertex="1">
+          <mxGeometry height="110" width="240" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-CoincidenciaVectorial" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="CoincidenciaVectorial" vertex="1">
+          <mxGeometry height="98" width="240" x="400" y="410" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-CoincidenciaVectorial-attr" parent="cls-CoincidenciaVectorial" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- fuente: String&#xa;- indiceFragmento: int&#xa;- distancia: double" vertex="1">
+          <mxGeometry height="70" width="240" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-FuenteRag" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="&amp;lt;&amp;lt;enumeration&amp;gt;&amp;gt;&#xa;FuenteRag" vertex="1">
+          <mxGeometry height="98" width="180" x="430" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-FuenteRag-attr" parent="cls-FuenteRag" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="GIT&#xa;SOPORTE" vertex="1">
+          <mxGeometry height="58" width="180" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-RolBucketS3" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="&amp;lt;&amp;lt;enumeration&amp;gt;&amp;gt;&#xa;RolBucketS3" vertex="1">
+          <mxGeometry height="118" width="180" x="1460" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-RolBucketS3-attr" parent="cls-RolBucketS3" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="SOPORTE&#xa;BORRADORES&#xa;WORKAREA" vertex="1">
+          <mxGeometry height="78" width="180" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-CelulaDocumento" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="CelulaDocumento&#xa;«colección: celulas»" vertex="1">
+          <mxGeometry height="138" width="260" x="700" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-CelulaDocumento-attr" parent="cls-CelulaDocumento" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- id: String&#xa;- codigoCedula: String&#xa;- nombreCelula: String&#xa;- descripcionCelula: String" vertex="1">
+          <mxGeometry height="98" width="260" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-RepositorioDocumento" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="RepositorioDocumento&#xa;«colección: repositorios»" vertex="1">
+          <mxGeometry height="258" width="280" x="690" y="440" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-RepositorioDocumento-attr" parent="cls-RepositorioDocumento" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- codigoCedula: String&lt;br&gt;- nombreRepo: String&lt;br&gt;- descripcionRepo: String&lt;br&gt;- urlRepo: String&lt;br&gt;- arbolRepo: Object&lt;br&gt;- indexado: boolean&lt;br&gt;- fechaActualizacion: Instant&lt;br&gt;- urlFolderS3Workarea: String" vertex="1">
+          <mxGeometry height="218" width="280" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-TareaDocumento" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="TareaDocumento&#xa;«colección: tareas»" vertex="1">
+          <mxGeometry height="238" width="280" x="150" y="630" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-TareaDocumento-attr" parent="cls-TareaDocumento" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- id: String&#xa;- codigoCedula: String&#xa;- nombreRepo: String&#xa;- codigoTarea: String&#xa;- enunciadoPrincipal: String&#xa;- estadoTarea: String&#xa;- urlFolderS3Borradores: String&#xa;- msgChat: List&amp;lt;MensajeChatDocumento&amp;gt;" vertex="1">
+          <mxGeometry height="198" width="280" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-TagDocumento" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;" value="TagDocumento&#xa;«colección: tags»" vertex="1">
+          <mxGeometry height="198" width="280" x="1170" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-TagDocumento-attr" parent="cls-TagDocumento" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- id: String&#xa;- codigoCedula: String&#xa;- nombreRepo: String&#xa;- tag: String&#xa;- descripcionTag: String&#xa;- urlToolTag: List&amp;lt;UrlToolTagDocumento&amp;gt;" vertex="1">
+          <mxGeometry height="158" width="280" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-MensajeChatDocumento" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="MensajeChatDocumento&#xa;«subdocumento: msg_chat»" vertex="1">
+          <mxGeometry height="198" width="280" x="150" y="950" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-MensajeChatDocumento-attr" parent="cls-MensajeChatDocumento" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- textoEntrada: String&#xa;- textoFormateado: String&#xa;- textoRespuesta: String&#xa;- fechaRespuesta: LocalDate&#xa;- horaRespuesta: Instant" vertex="1">
+          <mxGeometry height="158" width="280" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-UrlToolTagDocumento" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=40;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="UrlToolTagDocumento&#xa;«subdocumento: url_tool_tag»" vertex="1">
+          <mxGeometry height="138" width="280" x="1170" y="730" as="geometry" />
+        </mxCell>
+        <mxCell id="cls-UrlToolTagDocumento-attr" parent="cls-UrlToolTagDocumento" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;fontSize=12;" value="- nombreUrl: String&#xa;- urlTool: String&#xa;- contextoUrl: String" vertex="1">
+          <mxGeometry height="98" width="280" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-2" edge="1" parent="1" source="cls-DocumentoSoporte" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-RolBucketS3" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="1410" y="340" as="sourcePoint" />
+            <mxPoint x="1460" y="290" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-3" connectable="0" parent="UlCBI_opUjHv6nQMao5i-2" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="62" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-5" connectable="0" parent="UlCBI_opUjHv6nQMao5i-2" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-6" edge="1" parent="1" source="cls-FragmentoVectorial" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-FuenteRag" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="370" y="50" as="sourcePoint" />
+            <mxPoint x="450" y="50" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-7" connectable="0" parent="UlCBI_opUjHv6nQMao5i-6" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="80" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-8" connectable="0" parent="UlCBI_opUjHv6nQMao5i-6" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-9" edge="1" parent="1" source="cls-CoincidenciaVectorial" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-FuenteRag" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="400" y="240" as="sourcePoint" />
+            <mxPoint x="520" y="240" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-10" connectable="0" parent="UlCBI_opUjHv6nQMao5i-9" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="21" y="-89" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-11" connectable="0" parent="UlCBI_opUjHv6nQMao5i-9" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="20" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-12" edge="1" parent="1" source="cls-MensajeChatDocumento" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-TareaDocumento" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="310" y="487" as="sourcePoint" />
+            <mxPoint x="429" y="430" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-13" connectable="0" parent="UlCBI_opUjHv6nQMao5i-12" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="11" y="-62" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-14" connectable="0" parent="UlCBI_opUjHv6nQMao5i-12" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="10" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-15" edge="1" parent="1" source="cls-UrlToolTagDocumento" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-TagDocumento" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="540" y="507" as="sourcePoint" />
+            <mxPoint x="659" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-16" connectable="0" parent="UlCBI_opUjHv6nQMao5i-15" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="11" y="-44" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-17" connectable="0" parent="UlCBI_opUjHv6nQMao5i-15" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="10" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-18" edge="1" parent="1" source="cls-TagDocumento" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-RepositorioDocumento" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="1310" y="752" as="sourcePoint" />
+            <mxPoint x="1310" y="690" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-19" connectable="0" parent="UlCBI_opUjHv6nQMao5i-18" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="-169" y="-13" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-20" connectable="0" parent="UlCBI_opUjHv6nQMao5i-18" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="10" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-21" edge="1" parent="1" source="cls-RepositorioDocumento" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-CelulaDocumento" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="1270" y="560" as="sourcePoint" />
+            <mxPoint x="1070" y="560" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-22" connectable="0" parent="UlCBI_opUjHv6nQMao5i-21" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="11" y="-80" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-23" connectable="0" parent="UlCBI_opUjHv6nQMao5i-21" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-25" edge="1" parent="1" source="cls-DocumentoSoporte" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-RepositorioDocumento" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="1260" y="560" as="sourcePoint" />
+            <mxPoint x="1040" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-26" connectable="0" parent="UlCBI_opUjHv6nQMao5i-25" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="-134" y="73" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-27" connectable="0" parent="UlCBI_opUjHv6nQMao5i-25" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="*" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="6" y="-16" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-28" edge="1" parent="1" source="cls-RepositorioDocumento" style="endArrow=none;dashed=1;html=1;rounded=0;" target="cls-TareaDocumento" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="830" y="482" as="sourcePoint" />
+            <mxPoint x="830" y="380" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-29" connectable="0" parent="UlCBI_opUjHv6nQMao5i-28" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" y="1" as="geometry">
+            <mxPoint x="11" y="-25" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="UlCBI_opUjHv6nQMao5i-30" connectable="0" parent="UlCBI_opUjHv6nQMao5i-28" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="1" vertex="1">
+          <mxGeometry relative="1" x="-0.7957" as="geometry">
+            <mxPoint x="-214" y="46" as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

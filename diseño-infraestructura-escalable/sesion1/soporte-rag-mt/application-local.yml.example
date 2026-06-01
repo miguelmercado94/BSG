@@ -1,0 +1,17 @@
+# Copia a application-local.yml (gitignored) para overrides personales.
+#
+# spring:
+#   profiles:
+#     active: local
+#   data:
+#     mongodb:
+#       uri: mongodb://localhost:27017/soporte_rag_mt
+#   datasource:
+#     url: jdbc:postgresql://localhost:5432/soporte_rag_mt
+#
+# soporte-rag:
+#   almacenamiento:
+#     s3:
+#       endpoint: http://127.0.0.1:4566
+#
+# spring.ai.ollama.base-url=http://127.0.0.1:11434  (Si usaras la propiedad directa)

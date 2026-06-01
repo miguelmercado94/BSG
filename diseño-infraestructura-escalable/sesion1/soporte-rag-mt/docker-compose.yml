@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL con la extensión pgvector
+  postgres-vector:
+    image: pgvector/pgvector:pg16
+    container_name: postgres-vector-db
+    environment:
+      - POSTGRES_DB=rag_db
+      - POSTGRES_USER=rag_user
+      - POSTGRES_PASSWORD=rag_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Base de datos MongoDB
+  mongo:
+    image: mongo:7.0
+    container_name: mongo-db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # LocalStack para emular servicios de AWS (S3 y Redis)
+  localstack:
+    image: localstack/localstack:3.5
+    container_name: localstack-aws
+    ports:
+      - "4566:4566"            # Puerto principal para APIs de AWS
+      - "4510-4559:4510-4559"  # Rango para servicios externos
+    environment:
+      - SERVICES=s3,redis
+      - DEBUG=0
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+  # Ollama para modelos de lenguaje locales
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Eliminamos el despliegue con GPU por defecto para evitar errores en entornos WSL sin NVIDIA configurado
+
+volumes:
+  postgres_data:
+  mongo_data:
+  ollama_data:
