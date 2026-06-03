@@ -658,8 +658,8 @@ resource "aws_ecs_task_definition" "backend_task" {
       { name = "FIREBASE_ENABLED", value = "true" },
       { name = "FIREBASE_PROJECT_ID", value = "sesion-bsg" },
       # Misma ruta que Dockerfile (WORKDIR /app + COPY json). Ruta absoluta evita fallos si user.dir ≠ /app.
-      { name = "FIREBASE_CREDENTIALS_PATH", value = "/app/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
-      { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/app/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
+      { name = "FIREBASE_CREDENTIALS_PATH", value = "/app/bsg-sesion1-firebase-adminsdk-fbsvc-137f14c279.json" },
+      { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/app/bsg-sesion1-firebase-adminsdk-fbsvc-137f14c279.json" },
       { name = "DOCVIZ_EMBEDDINGS_PROVIDER", value = "spring-ai" },
       { name = "DOCVIZ_VECTOR_EMBEDDINGS_PROVIDER", value = "spring-ai" },
       { name = "DOCVIZ_SUPPORT_ENABLED", value = "true" },
