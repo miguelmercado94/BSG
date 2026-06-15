@@ -68,7 +68,7 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                     return servicioBucketS3.crearArchivo(RolBucketS3.WORKAREA, s3Path, contenido, "text/markdown")
                             .then(documentoSoporteServicio.crear(nuevoSoporte))
                             .flatMap(soporteGuardado -> 
-                                servicioEmbedding.embedirArchivo(true, soporteGuardado.nombreRepo(), soporteGuardado.codigoSoporte(), contenido)
+                                servicioEmbedding.embedirArchivo(true, request.getUrlRepo(), soporteGuardado.codigoSoporte(), contenido)
                                     .onErrorResume(e -> {
                                         log.error("Fallo el embedding para el soporte {}, haciendo rollback...", request.getCodigo());
                                         return servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, s3Path)
@@ -80,7 +80,7 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                                     .thenReturn(soporteGuardado)
                             );
                 })
-                .flatMap(this::enriquecerConUrlRepoYPresigned);
+                .flatMap(this::enriquecerConPresigned);
     }
 
     @Override
@@ -92,7 +92,7 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                         if (!request.getNombreArchivo().endsWith(".md")) {
                             return Mono.error(new IllegalArgumentException("El nombre del archivo debe tener extensión .md"));
                         }
-                        pathMono = repositorioServicio.obtenerRepoPorNombre(existente.nombreRepo())
+                        pathMono = repositorioServicio.obtenerRepo(existente.urlRepo())
                             .map(repo -> repo.getUrlFolderS3Workarea() + existente.codigoSoporte() + "-" + request.getNombreArchivo());
                     }
 
@@ -103,13 +103,13 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                              Mono<Void> borrarViejoS3 = existente.urlBucketS3().equals(resolvedPath) ? Mono.empty() : servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, existente.urlBucketS3());
                              s3AndEmbeddingTask = borrarViejoS3
                                      .then(servicioBucketS3.crearArchivo(RolBucketS3.WORKAREA, resolvedPath, contenido, "text/markdown"))
-                                     .then(servicioEmbedding.actualizarEmbedding(true, existente.nombreRepo(), existente.codigoSoporte(), contenido));
+                                     .then(servicioEmbedding.actualizarEmbedding(true, existente.urlRepo(), existente.codigoSoporte(), contenido));
                         }
 
                         DocumentoSoporte actualizado = new DocumentoSoporte(
                                 existente.id(),
                                 existente.codigoSoporte(),
-                                existente.nombreRepo(),
+                                existente.urlRepo(),
                                 StringUtils.hasText(request.getNombre()) ? request.getNombre() : existente.nombre(),
                                 StringUtils.hasText(request.getDescripcion()) ? request.getDescripcion() : existente.descripcion(),
                                 existente.namespaceVectorial(),
@@ -123,42 +123,37 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                                 .then(documentoSoporteServicio.actualizar(codigo, actualizado));
                     });
                 })
-                .flatMap(this::enriquecerConUrlRepoYPresigned);
+                .flatMap(this::enriquecerConPresigned);
     }
 
     @Override
     public Mono<SoporteResponseDto> eliminar(String codigo) {
         return documentoSoporteServicio.obtenerPorCodigo(codigo)
-                .flatMap(soporte -> servicioEmbedding.eliminarEmbedding(true, soporte.nombreRepo(), soporte.codigoSoporte())
+                .flatMap(soporte -> servicioEmbedding.eliminarEmbedding(true, soporte.urlRepo(), soporte.codigoSoporte())
                         .then(servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, soporte.urlBucketS3()))
                         .then(documentoSoporteServicio.eliminar(codigo))
-                        .then(enriquecerConUrlRepoYPresigned(soporte))
+                        .then(enriquecerConPresigned(soporte))
                 );
     }
 
     @Override
     public Mono<SoporteResponseDto> obtenerPorCodigo(String codigo) {
         return documentoSoporteServicio.obtenerPorCodigo(codigo)
-                .flatMap(this::enriquecerConUrlRepoYPresigned);
+                .flatMap(this::enriquecerConPresigned);
     }
 
     @Override
     public Flux<SoporteResponseDto> obtenerTodosPorUrlRepo(String urlRepo) {
         return documentoSoporteServicio.obtenerTodosPorUrlRepo(urlRepo)
-                .flatMap(this::enriquecerConUrlRepoYPresigned);
+                .flatMap(this::enriquecerConPresigned);
     }
 
-    private Mono<SoporteResponseDto> enriquecerConUrlRepoYPresigned(DocumentoSoporte soporte) {
-        Mono<String> urlRepoMono = repositorioServicio.obtenerRepoPorNombre(soporte.nombreRepo())
-                .map(repo -> repo.getUrl());
-        
-        Mono<String> presignedUrlMono = servicioBucketS3.generarUrlLectura(soporte.bucketRol(), soporte.urlBucketS3())
-                .defaultIfEmpty(""); // Si falla o no hay, devuelve string vacío
-
-        return Mono.zip(urlRepoMono, presignedUrlMono)
-                .map(tuple -> {
-                    SoporteResponseDto dto = soporteMapperDto.aResponse(soporte, tuple.getT1());
-                    dto.setUrlS3(tuple.getT2());
+    private Mono<SoporteResponseDto> enriquecerConPresigned(DocumentoSoporte soporte) {
+        return servicioBucketS3.generarUrlLectura(soporte.bucketRol(), soporte.urlBucketS3())
+                .defaultIfEmpty("") // Si falla o no hay, devuelve string vacío
+                .map(presignedUrl -> {
+                    SoporteResponseDto dto = soporteMapperDto.aResponse(soporte, soporte.urlRepo());
+                    dto.setUrlS3(presignedUrl);
                     return dto;
                 });
     }

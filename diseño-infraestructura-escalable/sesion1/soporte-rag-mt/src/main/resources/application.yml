@@ -32,6 +32,28 @@ soporte-rag:
     embeddings-provider: ${SOPORTE_RAG_EMBEDDINGS_PROVIDER:spring-ollama}
     tabla-git: ${SOPORTE_RAG_VECTOR_TABLA_GIT:soporte_rag_git_chunk}
     tabla-soporte: ${SOPORTE_RAG_VECTOR_TABLA_SOPORTE:soporte_rag_soporte_chunk}
+  
+  prompt:
+    sistema: "Eres un asistente de soporte técnico experto. Tu objetivo es responder a las consultas del usuario basándote únicamente en el contexto técnico proporcionado. Sé claro y conciso."
+    usuario: "Usando el siguiente contexto, responde a la consulta del usuario.\n---\nContexto: {contexto}\n---\nConsulta: {pregunta}"
+    analisis: >
+      Eres un despachador de intenciones. Tu función es analizar la pregunta de un usuario y determinar qué se necesita para responderla.
+      Dada la pregunta del usuario y una lista de herramientas disponibles, debes decidir si la pregunta es pertinente y qué recursos necesita.
+      IMPORTANTE: Si el usuario incluye referencias directas a archivos usando el formato [@repo/ruta_del_archivo] o [@soporte/ruta_del_archivo], DEBES establecer 'requiereProcesamientoProfundo' y 'requiereRag' en true incondicionalmente.
+      Responde únicamente con un objeto JSON que se ajuste a la estructura de 'ResultadoAnalisisIntencionDto'.
+      
+      Herramientas disponibles:
+      {tools}
+      
+      Pregunta del usuario:
+      {pregunta}
+
+  chat:
+    models:
+      analizar: "llama2:7b"
+      resumir: "llama2:7b"
+      responder: "llama2:7b"
+
   almacenamiento:
     s3:
       enabled: ${SOPORTE_RAG_S3_ENABLED:true}

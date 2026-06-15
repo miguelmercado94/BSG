@@ -12,7 +12,7 @@ public interface AlmacenDocumentoPort {
 
     Mono<DocumentoSoporte> buscarPorCodigo(String codigoSoporte);
 
-    Flux<DocumentoSoporte> listarPorNombreRepo(String nombreRepo);
+    Flux<DocumentoSoporte> listarPorUrlRepo(String urlRepo);
     
     Mono<Void> eliminarPorCodigo(String codigoSoporte);
 }

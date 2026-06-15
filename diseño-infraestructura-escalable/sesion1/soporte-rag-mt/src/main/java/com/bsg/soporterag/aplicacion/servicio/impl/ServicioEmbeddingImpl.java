@@ -5,13 +5,12 @@ import com.bsg.soporterag.dominio.modelo.FragmentoVectorial;
 import com.bsg.soporterag.dominio.modelo.FuenteRag;
 import com.bsg.soporterag.dominio.puerto.salida.AlmacenVectorialPort;
 import com.bsg.soporterag.infraestructura.adaptador.ia.SpringAiEmbeddingAdaptador;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -19,33 +18,27 @@ import java.util.Map;
 public class ServicioEmbeddingImpl implements ServicioEmbedding {
 
     private static final int MAX_CONCURRENCY = 4;
+    private static final int CHUNK_SIZE_FALLBACK = 800; // Tamaño de chunk aproximado en caracteres
 
     private final SpringAiEmbeddingAdaptador springAiEmbeddingAdaptador;
     private final AlmacenVectorialPort almacenVectorialPort;
-    private final TokenTextSplitter tokenTextSplitter;
 
     public ServicioEmbeddingImpl(
             SpringAiEmbeddingAdaptador springAiEmbeddingAdaptador,
-            AlmacenVectorialPort almacenVectorialPort,
-            TokenTextSplitter tokenTextSplitter) {
-
+            AlmacenVectorialPort almacenVectorialPort) {
         this.springAiEmbeddingAdaptador = springAiEmbeddingAdaptador;
         this.almacenVectorialPort = almacenVectorialPort;
-        this.tokenTextSplitter = tokenTextSplitter;
     }
 
     @Override
     public Mono<Void> embedirArchivo(
             boolean esLocal,
-            String nombreRepo,
+            String namespace,
             String nombreArchivo,
             byte[] contenidoArchivo) {
 
         FuenteRag fuente = obtenerFuente(esLocal);
-
-        String textoCompleto =
-                new String(contenidoArchivo, StandardCharsets.UTF_8);
-
+        String textoCompleto = new String(contenidoArchivo, StandardCharsets.UTF_8);
         List<String> chunks = dividirEnChunks(textoCompleto);
 
         if (chunks.isEmpty()) {
@@ -55,152 +48,91 @@ public class ServicioEmbeddingImpl implements ServicioEmbedding {
         return springAiEmbeddingAdaptador
                 .embedirLote(chunks)
                 .flatMap(embeddings -> {
-
                     Flux<FragmentoVectorial> fragmentos =
                             Flux.range(0, embeddings.size())
                                     .map(indiceChunk -> {
-
-                                        String idChunk =
-                                                generarIdChunk(
-                                                        nombreRepo,
-                                                        nombreArchivo,
-                                                        indiceChunk);
-
+                                        String idChunk = generarIdChunk(namespace, nombreArchivo, indiceChunk);
                                         return new FragmentoVectorial(
                                                 idChunk,
-                                                nombreRepo,
+                                                namespace,
                                                 nombreArchivo,
                                                 indiceChunk,
+                                                chunks.get(indiceChunk),
                                                 embeddings.get(indiceChunk)
                                         );
                                     });
-
-                    return almacenVectorialPort.guardarLote(
-                            fuente,
-                            nombreRepo,
-                            fragmentos
-                    );
+                    return almacenVectorialPort.guardarLote(fuente, namespace, fragmentos);
                 });
     }
 
     @Override
     public Mono<Void> embedirArchivos(
             boolean esLocal,
-            String nombreRepo,
+            String namespace,
             Map<String, byte[]> archivos) {
-
         return Flux.fromIterable(archivos.entrySet())
-                .flatMap(
-                        entry -> embedirArchivo(
-                                esLocal,
-                                nombreRepo,
-                                entry.getKey(),
-                                entry.getValue()
-                        ),
-                        MAX_CONCURRENCY
-                )
+                .flatMap(entry -> embedirArchivo(esLocal, namespace, entry.getKey(), entry.getValue()), MAX_CONCURRENCY)
                 .then();
     }
 
     @Override
     public Mono<Void> eliminarEmbedding(
             boolean esLocal,
-            String nombreRepo,
+            String namespace,
             String nombreArchivo) {
-
         FuenteRag fuente = obtenerFuente(esLocal);
-
-        return almacenVectorialPort.eliminarDocumentos(
-                fuente,
-                nombreRepo,
-                List.of(nombreArchivo)
-        );
+        return almacenVectorialPort.eliminarDocumentos(fuente, namespace, List.of(nombreArchivo));
     }
 
     @Override
     public Mono<Void> actualizarEmbedding(
             boolean esLocal,
-            String nombreRepo,
+            String namespace,
             String nombreArchivo,
             byte[] contenidoArchivo) {
-
-        return eliminarEmbedding(
-                esLocal,
-                nombreRepo,
-                nombreArchivo
-        ).then(
-                embedirArchivo(
-                        esLocal,
-                        nombreRepo,
-                        nombreArchivo,
-                        contenidoArchivo
-                )
-        );
+        return eliminarEmbedding(esLocal, namespace, nombreArchivo)
+                .then(embedirArchivo(esLocal, namespace, nombreArchivo, contenidoArchivo));
     }
 
     @Override
     public Mono<Void> eliminarEmbeddings(
             boolean esLocal,
-            String nombreRepo,
+            String namespace,
             List<String> nombresArchivos) {
-
         FuenteRag fuente = obtenerFuente(esLocal);
-
-        return almacenVectorialPort.eliminarDocumentos(
-                fuente,
-                nombreRepo,
-                nombresArchivos
-        );
+        return almacenVectorialPort.eliminarDocumentos(fuente, namespace, nombresArchivos);
     }
 
     @Override
-    public Mono<Void> eliminarTodosEmbeddingsPorRepo(
-            String nombreRepo) {
-
-        Mono<Void> eliminarGit =
-                almacenVectorialPort.eliminarNamespace(
-                        FuenteRag.GIT,
-                        nombreRepo
-                );
-
-        Mono<Void> eliminarSoporte =
-                almacenVectorialPort.eliminarNamespace(
-                        FuenteRag.SOPORTE,
-                        nombreRepo
-                );
-
-        return Mono.when(
-                eliminarGit,
-                eliminarSoporte
-        );
+    public Mono<Void> eliminarTodosEmbeddingsPorRepo(String namespace) {
+        Mono<Void> eliminarGit = almacenVectorialPort.eliminarNamespace(FuenteRag.GIT, namespace);
+        Mono<Void> eliminarSoporte = almacenVectorialPort.eliminarNamespace(FuenteRag.SOPORTE, namespace);
+        return Mono.when(eliminarGit, eliminarSoporte);
     }
 
     private FuenteRag obtenerFuente(boolean esLocal) {
-        return esLocal
-                ? FuenteRag.SOPORTE
-                : FuenteRag.GIT;
+        return esLocal ? FuenteRag.SOPORTE : FuenteRag.GIT;
     }
 
+    /**
+     * Implementación manual de chunking para evitar el conflicto con TokenTextSplitter.
+     * Divide el texto en trozos de tamaño fijo.
+     */
     private List<String> dividirEnChunks(String texto) {
-
-        Document documento = new Document(texto);
-
-        return tokenTextSplitter
-                .apply(List.of(documento))
-                .stream()
-                .map(Document::getText)
-                .toList();
+        List<String> chunks = new ArrayList<>();
+        if (texto == null || texto.isBlank()) {
+            return chunks;
+        }
+        for (int i = 0; i < texto.length(); i += CHUNK_SIZE_FALLBACK) {
+            chunks.add(texto.substring(i, Math.min(texto.length(), i + CHUNK_SIZE_FALLBACK)));
+        }
+        return chunks;
     }
 
     private String generarIdChunk(
-            String nombreRepo,
+            String namespace,
             String nombreArchivo,
             int indiceChunk) {
-
-        return nombreRepo
-                + ":"
-                + nombreArchivo
-                + ":"
-                + indiceChunk;
+        return namespace + ":" + nombreArchivo + ":" + indiceChunk;
     }
 }

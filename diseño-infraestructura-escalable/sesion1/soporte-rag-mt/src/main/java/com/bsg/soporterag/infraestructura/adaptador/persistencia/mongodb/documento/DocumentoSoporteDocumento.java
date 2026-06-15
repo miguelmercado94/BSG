@@ -16,14 +16,14 @@ import org.springframework.data.mongodb.core.mapping.Field;
  */
 @Data
 @Document(collection = "soportes")
-@CompoundIndex(name = "idx_soporte_repo_codigo", def = "{'nombre_repo': 1, 'codigo_soporte': 1}", unique = true)
+@CompoundIndex(name = "idx_soporte_repo_codigo", def = "{'url_repo': 1, 'codigo_soporte': 1}", unique = true)
 public class DocumentoSoporteDocumento {
 
     @Id
     private String id;
 
-    @Field("nombre_repo")
-    private String nombreRepo;
+    @Field("url_repo")
+    private String urlRepo;
 
     @Field("codigo_soporte")
     private String codigoSoporte;

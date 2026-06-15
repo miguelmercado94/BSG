@@ -2,13 +2,19 @@ package com.bsg.soporterag.aplicacion.servicio.impl;
 
 import com.bsg.soporterag.aplicacion.servicio.ServicioJGit;
 import com.bsg.soporterag.dominio.modelo.CambiosEntreCommitsGit;
+import com.bsg.soporterag.dominio.modelo.InfoArchivoGit;
 import com.bsg.soporterag.dominio.modelo.InventarioRepositorioGit;
+import com.bsg.soporterag.dominio.modelo.RamaGit;
 import com.bsg.soporterag.dominio.modelo.Repositorio;
 import com.bsg.soporterag.dominio.modelo.RutasRepositorioGit;
 import com.bsg.soporterag.dominio.puerto.salida.RepositorioGitPort;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class ServicioJGitImpl implements ServicioJGit {
@@ -31,6 +37,15 @@ public class ServicioJGitImpl implements ServicioJGit {
         String ruta = normalizarRutaArchivo(filePath);
         return validarRemoto(url)
                 .then(repositorioGitPort.extraerContenidoArchivo(url, normalizarRama(rama), ruta));
+    }
+
+    @Override
+    public Mono<byte[]> extraerContenidoArchivoEnCommit(String urlRepo, String commitHash, String filePath) {
+        String url = normalizarUrl(urlRepo);
+        String ruta = normalizarRutaArchivo(filePath);
+        String commit = normalizarCommit(commitHash);
+        return validarRemoto(url)
+                .then(repositorioGitPort.extraerContenidoArchivoEnCommit(url, commit, ruta));
     }
 
     @Override
@@ -70,6 +85,29 @@ public class ServicioJGitImpl implements ServicioJGit {
                         repositorioGitPort.extraerRutas(url, rama),
                         (commit, rutas) -> new InventarioRepositorioGit(
                                 rama, commit, rutas.filesPath(), rutas.folderPath())));
+    }
+
+    @Override
+    public Flux<RamaGit> extraerRamas(String urlRepo) {
+        String url = normalizarUrl(urlRepo);
+        return validarRemoto(url)
+                .thenMany(repositorioGitPort.extraerRamas(url));
+    }
+
+    @Override
+    public Mono<InfoArchivoGit> extraerInfoArchivo(String urlRepo, String rama, String filePath) {
+        String url = normalizarUrl(urlRepo);
+        String ruta = normalizarRutaArchivo(filePath);
+        String ramaNorm = normalizarRama(rama);
+        return validarRemoto(url)
+                .then(repositorioGitPort.extraerInfoArchivo(url, ramaNorm, ruta));
+    }
+
+    @Override
+    public Mono<Map<RamaGit, List<InfoArchivoGit>>> consultarRamasYArchivos(String urlRepo, List<String> rutasArchivos) {
+        String url = normalizarUrl(urlRepo);
+        return validarRemoto(url)
+                .then(repositorioGitPort.consultarRamasYArchivos(url, rutasArchivos));
     }
 
     private Mono<String> resolverRama(Repositorio repositorio, String url) {

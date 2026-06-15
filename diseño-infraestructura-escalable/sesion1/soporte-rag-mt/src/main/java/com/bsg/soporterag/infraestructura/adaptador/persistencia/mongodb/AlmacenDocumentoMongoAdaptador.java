@@ -37,8 +37,8 @@ public class AlmacenDocumentoMongoAdaptador implements AlmacenDocumentoPort {
     }
 
     @Override
-    public Flux<DocumentoSoporte> listarPorNombreRepo(String nombreRepo) {
-        return repositorio.findByNombreRepo(nombreRepo).map(mapper::aDominio);
+    public Flux<DocumentoSoporte> listarPorUrlRepo(String urlRepo) {
+        return repositorio.findByUrlRepo(urlRepo).map(mapper::aDominio);
     }
 
     @Override

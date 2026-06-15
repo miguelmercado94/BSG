@@ -1,34 +1,1 @@
-package com.bsg.soporterag.dominio.puerto.salida;
-
-import com.bsg.soporterag.dominio.modelo.CambiosEntreCommitsGit;
-import com.bsg.soporterag.dominio.modelo.RutasRepositorioGit;
-import reactor.core.publisher.Mono;
-
-/**
- * Puerto de salida Git <strong>solo consulta</strong> (RAG). No expone operaciones de escritura
- * en el remoto (push, commit, tag, branch delete, etc.).
- */
-public interface RepositorioGitPort {
-
-    /** Comprueba que el remoto responde ({@code git ls-remote}). */
-    Mono<Boolean> conectar(String repositorioUrl);
-
-    /** Rama por defecto del remoto (símbolo HEAD). */
-    Mono<String> extraerRamaPrincipal(String repositorioUrl);
-
-    /** SHA del tip de {@code rama} en el remoto ({@code ls-remote}, sin clonar). */
-    Mono<String> extraerUltimoCommit(String repositorioUrl, String rama);
-
-    /** Árbol de rutas en el tip de {@code rama} (clone local temporal + lectura de objetos). */
-    Mono<RutasRepositorioGit> extraerRutas(String repositorioUrl, String rama);
-
-    /** Contenido binario de un archivo en el tip de {@code rama} (solo lectura de blob). */
-    Mono<byte[]> extraerContenidoArchivo(String repositorioUrl, String rama, String rutaArchivo);
-
-    /**
-     * Rutas que difieren entre dos commits ya existentes en el historial (lectura + diff local).
-     * No modifica el repositorio remoto.
-     */
-    Mono<CambiosEntreCommitsGit> extraerRutasCambiadas(
-            String repositorioUrl, String rama, String commitViejo, String commitNuevo);
-}
+package com.bsg.soporterag.dominio.puerto.salida;import com.bsg.soporterag.dominio.modelo.CambiosEntreCommitsGit;import com.bsg.soporterag.dominio.modelo.InfoArchivoGit;import com.bsg.soporterag.dominio.modelo.RamaGit;import com.bsg.soporterag.dominio.modelo.RutasRepositorioGit;import reactor.core.publisher.Flux;import reactor.core.publisher.Mono;import java.util.List;import java.util.Map;/** * Puerto de salida Git <strong>solo consulta</strong> (RAG). No expone operaciones de escritura * en el remoto (push, commit, tag, branch delete, etc.). */public interface RepositorioGitPort {    Mono<Boolean> conectar(String repositorioUrl);    Mono<String> extraerRamaPrincipal(String repositorioUrl);    Mono<String> extraerUltimoCommit(String repositorioUrl, String rama);    Mono<RutasRepositorioGit> extraerRutas(String repositorioUrl, String rama);    Mono<byte[]> extraerContenidoArchivo(String repositorioUrl, String rama, String rutaArchivo);    Mono<byte[]> extraerContenidoArchivoEnCommit(String repositorioUrl, String commitHash, String rutaArchivo);    Mono<CambiosEntreCommitsGit> extraerRutasCambiadas(            String repositorioUrl, String rama, String commitViejo, String commitNuevo);    Flux<RamaGit> extraerRamas(String repositorioUrl);    Mono<InfoArchivoGit> extraerInfoArchivo(String repositorioUrl, String rama, String rutaArchivo);    /**     * Extrae información de ramas y opcionalmente el estado de ciertos archivos en cada rama.     * Esto es más eficiente que consultar cada archivo individualmente.     */    Mono<Map<RamaGit, List<InfoArchivoGit>>> consultarRamasYArchivos(String repositorioUrl, List<String> rutasArchivos);}

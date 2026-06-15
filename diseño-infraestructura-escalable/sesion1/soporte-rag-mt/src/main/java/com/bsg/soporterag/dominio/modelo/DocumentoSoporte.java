@@ -6,13 +6,13 @@ import java.time.Instant;
  * Metadatos de un documento de soporte.
  * <p>
  * El binario reside bajo {@code urlBucketS3}, normalmente dentro del prefijo
- * {@code urlFolderS3Workarea} del {@link #nombreRepo()} asociado (bucket {@link RolBucketS3#WORKAREA}).
+ * {@code urlFolderS3Workarea} de la {@link #urlRepo()} asociada (bucket {@link RolBucketS3#WORKAREA}).
  * El índice semántico vive en pgvector ({@code namespaceVectorial}).
  */
 public record DocumentoSoporte(
         String id,
         String codigoSoporte,
-        String nombreRepo,
+        String urlRepo,
         String nombre,
         String descripcion,
         String namespaceVectorial,

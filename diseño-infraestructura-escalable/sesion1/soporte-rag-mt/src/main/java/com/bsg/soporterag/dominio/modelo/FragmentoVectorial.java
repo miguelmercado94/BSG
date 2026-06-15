@@ -8,6 +8,7 @@ public record FragmentoVectorial(
         String namespace,
         String fuente,
         int indiceFragmento,
+        String contenido,
         float[] embedding
 ) {
 }

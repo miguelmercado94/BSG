@@ -34,6 +34,13 @@ soporte-rag:
   vector:
     embeddings-provider: spring-ai
     embedding-dimensions: ${SOPORTE_RAG_VECTOR_EMBEDDING_DIM:768}
+  
+  chat:
+    models:
+      analizar: "gpt-3.5-turbo"
+      resumir: "gpt-4o-mini"
+      responder: "gpt-4o"
+
   almacenamiento:
     s3:
       endpoint: ""

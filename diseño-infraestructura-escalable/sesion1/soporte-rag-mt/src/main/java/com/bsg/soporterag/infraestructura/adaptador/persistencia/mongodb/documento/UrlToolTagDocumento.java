@@ -9,9 +9,6 @@ import org.springframework.data.mongodb.core.mapping.Field;
 @Data
 public class UrlToolTagDocumento {
 
-    @Field("nombre_url")
-    private String nombreUrl;
-
     @Field("url_tool")
     private String urlTool;
 

@@ -101,4 +101,10 @@ public class CelulaServicioImpl implements CelulaServicio {
     public Mono<Long> contarAsociacionesParaRepo(String nombreRepo) {
         return celulaRepositorioPort.contarAsociacionesPorRepo(nombreRepo);
     }
+
+    @Override
+    public Mono<Boolean> existeAsociacion(String codigoCelula, String nombreRepo) {
+        return celulaRepositorioPort.listarNombresRepoPorCodigoCelula(codigoCelula)
+                .any(repo -> repo.equals(nombreRepo));
+    }
 }

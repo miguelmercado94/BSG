@@ -42,6 +42,7 @@ public class VectorEsquemaInicializador {
                     namespace VARCHAR(512) NOT NULL,
                     fuente TEXT NOT NULL,
                     indice_fragmento INT NOT NULL,
+                    contenido TEXT NOT NULL,
                     embedding vector(%d) NOT NULL
                 )
                 """.formatted(nombreTabla, dim));

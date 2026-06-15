@@ -6,6 +6,7 @@ package com.bsg.soporterag.dominio.modelo;
 public record CoincidenciaVectorial(
         String fuente,
         int indiceFragmento,
+        String texto,
         double distancia
 ) {
 }

@@ -89,21 +89,22 @@ public class PgVectorAlmacenAdaptador implements AlmacenVectorialPort {
             return;
         }
         String tabla = propiedades.nombreTabla(fuente);
-        String sql = "INSERT INTO " + tabla + " (id, namespace, fuente, indice_fragmento, embedding) "
-                + "VALUES (?, ?, ?, ?, ?) "
+        String sql = "INSERT INTO " + tabla + " (id, namespace, fuente, indice_fragmento, contenido, embedding) "
+                + "VALUES (?, ?, ?, ?, ?, ?) "
                 + "ON CONFLICT (id) DO UPDATE SET "
                 + "namespace = EXCLUDED.namespace, "
                 + "fuente = EXCLUDED.fuente, "
                 + "indice_fragmento = EXCLUDED.indice_fragmento, "
+                + "contenido = EXCLUDED.contenido, "
                 + "embedding = EXCLUDED.embedding";
 
-        // Usamos una lambda limpia para el batchUpdate evitando conflictos de llaves ({}) anónimas
         jdbc.batchUpdate(sql, registros, registros.size(), (PreparedStatement ps, FragmentoVectorial r) -> {
             ps.setString(1, r.id());
             ps.setString(2, namespace);
-            ps.setString(3, r.fuente()); // el campo fuente parece usarse como id del documento en esta implementación (ej. ruta del archivo)
+            ps.setString(3, r.fuente());
             ps.setInt(4, r.indiceFragmento());
-            ps.setObject(5, new PGvector(r.embedding()));
+            ps.setString(5, r.contenido());
+            ps.setObject(6, new PGvector(r.embedding()));
         });
     }
 
@@ -114,7 +115,7 @@ public class PgVectorAlmacenAdaptador implements AlmacenVectorialPort {
         PGvector vector = new PGvector(embedding);
         
         String sql = String.format(
-                "SELECT fuente, indice_fragmento, (embedding <=> ?) AS dist FROM %s WHERE namespace = ? ORDER BY dist ASC LIMIT ?",
+                "SELECT fuente, indice_fragmento, contenido, (embedding <=> ?) AS dist FROM %s WHERE namespace = ? ORDER BY dist ASC LIMIT ?",
                 tabla);
 
         return jdbc.query(
@@ -132,6 +133,7 @@ public class PgVectorAlmacenAdaptador implements AlmacenVectorialPort {
         return new CoincidenciaVectorial(
                 rs.getString("fuente"),
                 rs.getInt("indice_fragmento"),
+                rs.getString("contenido"),
                 rs.getDouble("dist"));
     }
 }

@@ -26,4 +26,5 @@ public class Repositorio {
     private String ramaPrincipal;
     private String ultimoCommit;
     private String urlFolderS3Workarea;
+    private List<String> tags = new ArrayList<>(); // Lista de nombres de tags
 }

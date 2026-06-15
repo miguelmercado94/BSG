@@ -11,7 +11,7 @@ public interface DocumentoSoporteRepositorioMongo extends ReactiveMongoRepositor
 
     Flux<DocumentoSoporteDocumento> findByNamespaceVectorial(String namespaceVectorial);
 
-    Flux<DocumentoSoporteDocumento> findByNombreRepo(String nombreRepo);
+    Flux<DocumentoSoporteDocumento> findByUrlRepo(String urlRepo);
 
     Mono<Void> deleteByCodigoSoporte(String codigoSoporte);
 }

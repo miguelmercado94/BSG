@@ -5,12 +5,20 @@ import com.bsg.soporterag.infraestructura.adaptador.persistencia.mongodb.documen
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.stream.Collectors;
 
 /**
  * Mapeo {@link Repositorio} ↔ {@link RepositorioDocumento} (Mongo).
  */
 @Component
 public class RepositorioDocumentoMapper {
+
+    private final TagDocumentoMapper tagMapper;
+
+    public RepositorioDocumentoMapper(TagDocumentoMapper tagMapper) {
+        this.tagMapper = tagMapper;
+    }
 
     public Repositorio aDominio(RepositorioDocumento documento) {
         if (documento == null) {
@@ -32,6 +40,15 @@ public class RepositorioDocumentoMapper {
         dominio.setRamaPrincipal(documento.getRamaPrincipal());
         dominio.setUltimoCommit(documento.getUltimoCommit());
         dominio.setUrlFolderS3Workarea(documento.getUrlFolderS3Workarea());
+        
+        if (documento.getTags() != null) {
+            dominio.setTags(documento.getTags().stream()
+                    .map(tagMapper::aDominio)
+                    .collect(Collectors.toList()));
+        } else {
+            dominio.setTags(Collections.emptyList());
+        }
+
         return dominio;
     }
 
@@ -55,6 +72,15 @@ public class RepositorioDocumentoMapper {
         documento.setRamaPrincipal(dominio.getRamaPrincipal());
         documento.setUltimoCommit(dominio.getUltimoCommit());
         documento.setUrlFolderS3Workarea(dominio.getUrlFolderS3Workarea());
+
+        if (dominio.getTags() != null) {
+            documento.setTags(dominio.getTags().stream()
+                    .map(tagMapper::aDocumento)
+                    .collect(Collectors.toList()));
+        } else {
+            documento.setTags(Collections.emptyList());
+        }
+
         return documento;
     }
 }

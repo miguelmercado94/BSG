@@ -2,6 +2,8 @@ package com.bsg.soporterag;
 
 import com.bsg.soporterag.configuracion.AlmacenamientoS3Propiedades;
 import com.bsg.soporterag.configuracion.CacheRedisPropiedades;
+import com.bsg.soporterag.configuracion.ChatPropiedades;
+import com.bsg.soporterag.configuracion.PromptsPropiedades;
 import com.bsg.soporterag.configuracion.VectorPropiedades;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -11,7 +13,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 @EnableConfigurationProperties({
         VectorPropiedades.class,
         AlmacenamientoS3Propiedades.class,
-        CacheRedisPropiedades.class
+        CacheRedisPropiedades.class,
+        PromptsPropiedades.class,
+        ChatPropiedades.class
 })
 public class SoporteRagMtApplication {
 

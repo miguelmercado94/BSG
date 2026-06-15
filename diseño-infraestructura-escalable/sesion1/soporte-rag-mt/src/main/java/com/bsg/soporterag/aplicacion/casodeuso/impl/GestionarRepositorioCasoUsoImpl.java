@@ -9,18 +9,16 @@ import com.bsg.soporterag.aplicacion.dto.response.IndexacionArchivoResponseDto;
 import com.bsg.soporterag.aplicacion.dto.response.IndexacionCompletaResponseDto;
 import com.bsg.soporterag.aplicacion.dto.response.RepositorioResponseDto;
 import com.bsg.soporterag.aplicacion.mapperdto.RepositorioMapperDto;
-import com.bsg.soporterag.aplicacion.servicio.CelulaServicio;
-import com.bsg.soporterag.aplicacion.servicio.RepositorioServicio;
-import com.bsg.soporterag.aplicacion.servicio.ServicioBucketS3;
-import com.bsg.soporterag.aplicacion.servicio.ServicioEmbedding;
-import com.bsg.soporterag.aplicacion.servicio.ServicioJGit;
+import com.bsg.soporterag.aplicacion.servicio.*;
 import com.bsg.soporterag.dominio.excepcion.CelulaNoEncontradaException;
 import com.bsg.soporterag.dominio.modelo.CambiosEntreCommitsGit;
 import com.bsg.soporterag.dominio.modelo.Repositorio;
 import com.bsg.soporterag.dominio.modelo.RolBucketS3;
+import com.bsg.soporterag.dominio.modelo.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -45,23 +43,80 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
     private final ServicioBucketS3 servicioBucketS3;
     private final ServicioEmbedding servicioEmbedding;
     private final CelulaServicio celulaServicio;
+    private final TagServicio tagServicio;
 
-    // Constructor...
     public GestionarRepositorioCasoUsoImpl(
             RepositorioServicio repositorioServicio,
             RepositorioMapperDto repositorioMapperDto,
             ServicioJGit servicioJGit,
             ServicioBucketS3 servicioBucketS3,
             ServicioEmbedding servicioEmbedding,
-            CelulaServicio celulaServicio) {
+            CelulaServicio celulaServicio,
+            TagServicio tagServicio) {
         this.repositorioServicio = repositorioServicio;
         this.repositorioMapperDto = repositorioMapperDto;
         this.servicioJGit = servicioJGit;
         this.servicioBucketS3 = servicioBucketS3;
         this.servicioEmbedding = servicioEmbedding;
         this.celulaServicio = celulaServicio;
+        this.tagServicio = tagServicio;
     }
 
+    @Override
+    public Mono<RepositorioResponseDto> crearRepo(RepositorioRequestDto request) {
+        validarNombre(request);
+        validarCodigoCelula(request.getCodigoCelula());
+        String url = normalizarUrl(request.getUrl());
+
+        Mono<Void> validacionCelula = celulaServicio.obtenerPorCodigo(request.getCodigoCelula())
+                .switchIfEmpty(Mono.error(new CelulaNoEncontradaException(request.getCodigoCelula())))
+                .then();
+
+        Mono<List<String>> tagsValidadosMono;
+        if (CollectionUtils.isEmpty(request.getTags())) {
+            tagsValidadosMono = Mono.just(new ArrayList<>());
+        } else {
+            tagsValidadosMono = tagServicio.obtenerTagsPorNombres(request.getTags().toArray(new String[0]))
+                    .map(Tag::getTag)
+                    .collectList();
+        }
+
+        return validacionCelula
+                .then(tagsValidadosMono)
+                .flatMap(tagsValidados -> {
+                    Repositorio repositorio = repositorioMapperDto.aDominioDesdeRequest(request, url);
+                    repositorio.setTags(tagsValidados);
+                    log.info("Alta repositorio iniciada | nombre={} url={} celula={} tagsValidados={}", 
+                            repositorio.getNombre(), url, request.getCodigoCelula(), tagsValidados);
+                    
+                    return servicioJGit.resolverRama(url, repositorio.getRamaPrincipal())
+                            .doOnSubscribe(s -> log.info("Git: conectando e inventariando remoto | url={}", url))
+                            .flatMap(rama -> {
+                                repositorio.setRamaPrincipal(rama);
+                                return Mono.zip(
+                                        servicioJGit.obtenerUltimoCommit(url, rama),
+                                        servicioJGit.extraerArbolRutas(url, rama));
+                            })
+                            .map(tuple -> {
+                                repositorio.setUltimoCommit(tuple.getT1());
+                                repositorioMapperDto.aplicarArbolRutas(repositorio, tuple.getT2());
+                                repositorio.setFechaActualizacion(Instant.now());
+                                return repositorio;
+                            })
+                            .flatMap(repo -> {
+                                log.info("Mongo: persistiendo repositorio | nombre={} url={}", repo.getNombre(), repo.getUrl());
+                                return repositorioServicio.crearNuevoRepo(repo);
+                            })
+                            .flatMap(repoGuardado -> {
+                                log.info("Asociando repositorio {} a celula {}", repoGuardado.getNombre(), request.getCodigoCelula());
+                                return celulaServicio.asociarRepositorio(request.getCodigoCelula(), repoGuardado.getNombre())
+                                        .thenReturn(repoGuardado);
+                            })
+                            .map(repositorioMapperDto::aResponse);
+                });
+    }
+    
+    // ... resto de métodos ...
     @Override
     public Mono<RepositorioResponseDto> obtenerRepo(String urlRepo) {
         String urlNormalizada = normalizarUrl(urlRepo);
@@ -118,89 +173,24 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
     }
 
     private Mono<Void> eliminarRepoCompleto(Repositorio repo) {
-        String nombreRepo = repo.getNombre();
-        log.info("Ejecutando eliminación completa para repo={}", nombreRepo);
+        String urlRepo = repo.getUrl();
+        log.info("Ejecutando eliminación completa para repo={}", urlRepo);
 
-        Mono<Void> eliminarAsociaciones = celulaServicio.desasociarRepositorioDeTodasCelulas(nombreRepo)
-                .doOnSuccess(v -> log.info("Asociaciones eliminadas para repo={}", nombreRepo));
+        Mono<Void> eliminarAsociaciones = celulaServicio.desasociarRepositorioDeTodasCelulas(repo.getNombre())
+                .doOnSuccess(v -> log.info("Asociaciones eliminadas para repo={}", urlRepo));
 
-        Mono<Void> eliminarEmbeddings = servicioEmbedding.eliminarTodosEmbeddingsPorRepo(nombreRepo)
-                .doOnSuccess(v -> log.info("Embeddings eliminados para repo={}", nombreRepo));
+        Mono<Void> eliminarEmbeddings = servicioEmbedding.eliminarTodosEmbeddingsPorRepo(urlRepo)
+                .doOnSuccess(v -> log.info("Embeddings eliminados para repo={}", urlRepo));
 
         Mono<Void> eliminarS3 = servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, repo.getUrlFolderS3Workarea())
-                .doOnSuccess(v -> log.info("Carpeta S3 eliminada para repo={}", nombreRepo));
+                .doOnSuccess(v -> log.info("Carpeta S3 eliminada para repo={}", urlRepo));
 
-        Mono<Void> eliminarDocumento = repositorioServicio.eliminarRepo(repo.getUrl())
-                .doOnSuccess(v -> log.info("Documento de repositorio eliminado para repo={}", nombreRepo));
+        Mono<Void> eliminarDocumento = repositorioServicio.eliminarRepo(urlRepo)
+                .doOnSuccess(v -> log.info("Documento de repositorio eliminado para repo={}", urlRepo));
 
         return Mono.when(eliminarAsociaciones, eliminarEmbeddings, eliminarS3)
                 .then(eliminarDocumento)
-                .doOnSuccess(v -> log.info("Eliminación completa finalizada para repo={}", nombreRepo));
-    }
-    
-    // ... resto de métodos sin cambios
-    @Override
-    public Mono<RepositorioResponseDto> crearRepo(RepositorioRequestDto request) {
-        validarNombre(request);
-        validarCodigoCelula(request.getCodigoCelula());
-        String url = normalizarUrl(request.getUrl());
-        
-        return celulaServicio.obtenerPorCodigo(request.getCodigoCelula())
-                .switchIfEmpty(Mono.error(new CelulaNoEncontradaException(request.getCodigoCelula())))
-                .flatMap(celula -> {
-                    Repositorio repositorio = repositorioMapperDto.aDominioDesdeRequest(request, url);
-                    log.info("Alta repositorio iniciada | nombre={} url={} celula={}", repositorio.getNombre(), url, request.getCodigoCelula());
-                    
-                    return servicioJGit.resolverRama(url, repositorio.getRamaPrincipal())
-                            .doOnSubscribe(s -> log.info("Git: conectando e inventariando remoto | url={}", url))
-                            .flatMap(rama -> {
-                                repositorio.setRamaPrincipal(rama);
-                                return Mono.zip(
-                                        servicioJGit.obtenerUltimoCommit(url, rama),
-                                        servicioJGit.extraerArbolRutas(url, rama));
-                            })
-                            .map(tuple -> {
-                                repositorio.setUltimoCommit(tuple.getT1());
-                                repositorioMapperDto.aplicarArbolRutas(repositorio, tuple.getT2());
-                                repositorio.setFechaActualizacion(Instant.now());
-                                return repositorio;
-                            })
-                            .doOnNext(repo -> log.info(
-                                    "Git: inventario completado | url={} rama={} commit={} archivos={} carpetas={}",
-                                    url,
-                                    repo.getRamaPrincipal(),
-                                    repo.getUltimoCommit(),
-                                    repo.getFilesPath() != null ? repo.getFilesPath().size() : 0,
-                                    repo.getFolderPath() != null ? repo.getFolderPath().size() : 0))
-                            .flatMap(repo -> {
-                                log.info(
-                                        "S3: creando carpeta en workarea | prefijo={}",
-                                        repo.getUrlFolderS3Workarea());
-                                return servicioBucketS3
-                                        .crearCarpeta(RolBucketS3.WORKAREA, repo.getUrlFolderS3Workarea())
-                                        .doOnSuccess(v -> log.info(
-                                                "S3: carpeta workarea creada | prefijo={}",
-                                                repo.getUrlFolderS3Workarea()))
-                                        .thenReturn(repo);
-                            })
-                            .flatMap(repo -> {
-                                log.info(
-                                        "Mongo: persistiendo repositorio | nombre={} url={}",
-                                        repo.getNombre(),
-                                        repo.getUrl());
-                                return repositorioServicio.crearNuevoRepo(repo)
-                                        .doOnSuccess(guardado -> log.info(
-                                                "Mongo: repositorio guardado | nombre={} url={}",
-                                                guardado.getNombre(),
-                                                guardado.getUrl()));
-                            })
-                            .flatMap(repoGuardado -> {
-                                log.info("Asociando repositorio {} a celula {}", repoGuardado.getNombre(), request.getCodigoCelula());
-                                return celulaServicio.asociarRepositorio(request.getCodigoCelula(), repoGuardado.getNombre())
-                                        .thenReturn(repoGuardado);
-                            })
-                            .map(repositorioMapperDto::aResponse);
-                });
+                .doOnSuccess(v -> log.info("Eliminación completa finalizada para repo={}", urlRepo));
     }
 
     @Override
@@ -235,7 +225,6 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
                     record ResultadoIndexacion(String filePath, boolean exitoso, String mensajeError) {}
 
                     return Flux.fromIterable(repo.getFilesPath())
-                            // flatMap con concurrency 3: Procesa hasta 3 archivos a la vez.
                             .flatMap(filePath -> 
                                 embedirArchivoIndividualLanzandoError(repo, filePath)
                                     .thenReturn(new ResultadoIndexacion(filePath, true, null))
@@ -244,7 +233,7 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
                                         log.warn("Fallo al intentar embeber el archivo '{}' en repo '{}'. Causa: {}.", filePath, repo.getNombre(), mensajeLimpio);
                                         return Mono.just(new ResultadoIndexacion(filePath, false, mensajeLimpio));
                                     }),
-                            3) // concurrency level
+                            3)
                             .collectList()
                             .flatMap(resultados -> {
                                 List<String> exitosos = new ArrayList<>();
@@ -292,7 +281,7 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
         return repositorioServicio.obtenerRepo(urlNormalizada)
                 .flatMap(repo -> contenidoMono
-                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, repo.getNombre(), filePath, contenido))
+                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, repo.getUrl(), filePath, contenido))
                         .thenReturn(crearRespuestaArchivo(filePath, true, "Archivo indexado correctamente."))
                 )
                 .onErrorResume(e -> {
@@ -316,18 +305,17 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
             return "El archivo excede la longitud máxima de contexto permitida por el modelo.";
         }
         if (msg.contains("PreparedStatementCallback") || msg.contains("SQL [")) {
-            // Extraer una causa más amigable si es posible, de lo contrario un mensaje genérico de BD
             return "Error de persistencia vectorial. Posible conflicto de datos o archivo demasiado grande.";
         }
         return msg;
     }
-
+    
     private Mono<Repositorio> actualizarDescripcion(Repositorio existente, String nuevaDescripcion) {
         if (StringUtils.hasText(nuevaDescripcion)) {
             existente.setDescripcion(nuevaDescripcion);
             log.info("Descripcion actualizada para repo={} a '{}'", existente.getNombre(), nuevaDescripcion);
         }
-        return Mono.just(existente); // Se guarda al final
+        return Mono.just(existente);
     }
 
     private Mono<Repositorio> procesarCambiosGit(Repositorio repo, String ramaSolicitada) {
@@ -375,19 +363,19 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
         Mono<Void> eliminaciones = Flux.fromIterable(cambios.rutasEliminadas() != null ? cambios.rutasEliminadas() : java.util.List.of())
                 .doOnNext(ruta -> log.info("Eliminando embedding: {}", ruta))
-                .flatMap(ruta -> servicioEmbedding.eliminarEmbedding(false, nombreRepo, ruta))
+                .flatMap(ruta -> servicioEmbedding.eliminarEmbedding(false, url, ruta))
                 .then();
 
         Mono<Void> agregaciones = Flux.fromIterable(cambios.rutasAgregadas() != null ? cambios.rutasAgregadas() : java.util.List.of())
                 .doOnNext(ruta -> log.info("Agregando embedding: {}", ruta))
                 .flatMap(ruta -> servicioJGit.extraerContenidoArchivo(url, rama, ruta)
-                        .flatMap(contenido -> servicioEmbedding.embedirArchivo(false, nombreRepo, ruta, contenido)))
+                        .flatMap(contenido -> servicioEmbedding.embedirArchivo(false, url, ruta, contenido)))
                 .then();
 
         Mono<Void> modificaciones = Flux.fromIterable(cambios.rutasModificadas() != null ? cambios.rutasModificadas() : java.util.List.of())
                 .doOnNext(ruta -> log.info("Actualizando embedding: {}", ruta))
                 .flatMap(ruta -> servicioJGit.extraerContenidoArchivo(url, rama, ruta)
-                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, nombreRepo, ruta, contenido)))
+                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, url, ruta, contenido)))
                 .then();
 
         return Mono.when(eliminaciones, agregaciones, modificaciones);
@@ -406,7 +394,7 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
         return servicioJGit.extraerContenidoArchivo(repo.getUrl(), repo.getRamaPrincipal(), filePath)
                 .flatMap(contenido -> {
                     log.info("Procesando embedding para archivo: {}", filePath);
-                    return servicioEmbedding.actualizarEmbedding(false, repo.getNombre(), filePath, contenido)
+                    return servicioEmbedding.actualizarEmbedding(false, repo.getUrl(), filePath, contenido)
                             .doOnSuccess(v -> log.info("Embedding exitoso para archivo: {}", filePath));
                 });
     }

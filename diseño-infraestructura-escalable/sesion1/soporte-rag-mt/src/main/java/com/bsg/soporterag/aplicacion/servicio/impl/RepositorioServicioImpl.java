@@ -64,12 +64,22 @@ public class RepositorioServicioImpl implements RepositorioServicio {
     }
 
     @Override
-    public Flux<Repositorio> obtenerTodoReposPorCelula(String codigoCelula) {
+    public Flux<Repositorio> obtenerTodosPorCelula(String codigoCelula) {
         return celulaServicio.listarNombresRepoPorCodigoCelula(codigoCelula)
                 .flatMap(nombreRepo -> repositorioPort.buscarPorNombre(nombreRepo)
                         .switchIfEmpty(Mono.error(new IllegalStateException(
                                 "Repositorio global no encontrado para nombre_repo='" + nombreRepo
                                         + "' (célula " + codigoCelula + ")"))));
+    }
+
+    @Override
+    public Flux<Repositorio> obtenerTodosPorTag(String nombreTag) {
+        return repositorioPort.buscarPorTag(nombreTag);
+    }
+
+    @Override
+    public Mono<Long> desasociarTagDeTodos(String nombreTag) {
+        return repositorioPort.desasociarTagDeTodos(nombreTag);
     }
 
     private String normalizarUrl(String url) {

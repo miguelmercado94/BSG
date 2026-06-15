@@ -19,5 +19,9 @@ public interface RepositorioServicio {
 
     Mono<Repositorio> obtenerRepoPorNombre(String nombre);
 
-    Flux<Repositorio> obtenerTodoReposPorCelula(String codigoCelula);
+    Flux<Repositorio> obtenerTodosPorCelula(String codigoCelula);
+
+    Flux<Repositorio> obtenerTodosPorTag(String nombreTag);
+
+    Mono<Long> desasociarTagDeTodos(String nombreTag);
 }

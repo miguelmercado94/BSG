@@ -14,7 +14,7 @@ public class DocumentoSoporteDocumentoMapper {
         return new DocumentoSoporte(
                 documento.getId(),
                 documento.getCodigoSoporte(),
-                documento.getNombreRepo(),
+                documento.getUrlRepo(),
                 documento.getNombre(),
                 documento.getDescripcion(),
                 documento.getNamespaceVectorial(),
@@ -30,7 +30,7 @@ public class DocumentoSoporteDocumentoMapper {
         }
         DocumentoSoporteDocumento documento = new DocumentoSoporteDocumento();
         documento.setId(dominio.id());
-        documento.setNombreRepo(dominio.nombreRepo());
+        documento.setUrlRepo(dominio.urlRepo());
         documento.setCodigoSoporte(dominio.codigoSoporte());
         documento.setNombre(dominio.nombre());
         documento.setDescripcion(dominio.descripcion());

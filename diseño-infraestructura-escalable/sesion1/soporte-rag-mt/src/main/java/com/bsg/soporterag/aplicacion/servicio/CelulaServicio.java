@@ -25,4 +25,5 @@ public interface CelulaServicio {
     Mono<Void> desasociarRepositorio(String codigoCelula, String nombreRepo);
     Mono<Void> desasociarRepositorioDeTodasCelulas(String nombreRepo);
     Mono<Long> contarAsociacionesParaRepo(String nombreRepo);
+    Mono<Boolean> existeAsociacion(String codigoCelula, String nombreRepo);
 }

@@ -1,7 +1,6 @@
 package com.bsg.soporterag.aplicacion.servicio.impl;
 
 import com.bsg.soporterag.aplicacion.servicio.DocumentoSoporteServicio;
-import com.bsg.soporterag.aplicacion.servicio.RepositorioServicio;
 import com.bsg.soporterag.dominio.modelo.DocumentoSoporte;
 import com.bsg.soporterag.dominio.puerto.salida.AlmacenDocumentoPort;
 import org.springframework.stereotype.Service;
@@ -13,18 +12,13 @@ import reactor.core.publisher.Mono;
 public class DocumentoSoporteServicioImpl implements DocumentoSoporteServicio {
 
     private final AlmacenDocumentoPort almacenDocumentoPort;
-    private final RepositorioServicio repositorioServicio;
 
-    public DocumentoSoporteServicioImpl(
-            AlmacenDocumentoPort almacenDocumentoPort,
-            RepositorioServicio repositorioServicio) {
+    public DocumentoSoporteServicioImpl(AlmacenDocumentoPort almacenDocumentoPort) {
         this.almacenDocumentoPort = almacenDocumentoPort;
-        this.repositorioServicio = repositorioServicio;
     }
 
     @Override
     public Mono<DocumentoSoporte> crear(DocumentoSoporte documento) {
-        // Podrías añadir validaciones adicionales aquí
         return almacenDocumentoPort.guardar(documento);
     }
 
@@ -32,17 +26,16 @@ public class DocumentoSoporteServicioImpl implements DocumentoSoporteServicio {
     public Mono<DocumentoSoporte> actualizar(String codigoSoporte, DocumentoSoporte documentoActualizado) {
         return almacenDocumentoPort.buscarPorCodigo(codigoSoporte)
                 .flatMap(existente -> {
-                    // Actualizar campos permitidos creando una nueva instancia del record (inmutabilidad)
                     DocumentoSoporte modificado = new DocumentoSoporte(
                             existente.id(),
-                            existente.codigoSoporte(), // Mantener el código original
-                            documentoActualizado.nombreRepo() != null ? documentoActualizado.nombreRepo() : existente.nombreRepo(),
+                            existente.codigoSoporte(),
+                            documentoActualizado.urlRepo() != null ? documentoActualizado.urlRepo() : existente.urlRepo(),
                             documentoActualizado.nombre() != null ? documentoActualizado.nombre() : existente.nombre(),
                             documentoActualizado.descripcion() != null ? documentoActualizado.descripcion() : existente.descripcion(),
                             documentoActualizado.namespaceVectorial() != null ? documentoActualizado.namespaceVectorial() : existente.namespaceVectorial(),
                             documentoActualizado.urlBucketS3() != null ? documentoActualizado.urlBucketS3() : existente.urlBucketS3(),
                             documentoActualizado.bucketRol() != null ? documentoActualizado.bucketRol() : existente.bucketRol(),
-                            documentoActualizado.indexado(), // Asume el nuevo valor
+                            documentoActualizado.indexado(),
                             documentoActualizado.actualizadoEn() != null ? documentoActualizado.actualizadoEn() : existente.actualizadoEn()
                     );
                     return almacenDocumentoPort.guardar(modificado);
@@ -64,11 +57,7 @@ public class DocumentoSoporteServicioImpl implements DocumentoSoporteServicio {
         if (!StringUtils.hasText(urlRepo)) {
             return Flux.error(new IllegalArgumentException("La URL del repositorio es obligatoria"));
         }
-        
-        // 1. Buscamos el repositorio por URL para obtener su nombre
-        return repositorioServicio.obtenerRepo(urlRepo.trim())
-                // 2. Con el nombre del repositorio, buscamos todos sus documentos de soporte
-                .flatMapMany(repo -> almacenDocumentoPort.listarPorNombreRepo(repo.getNombre()));
+        return almacenDocumentoPort.listarPorUrlRepo(urlRepo.trim());
     }
 
     @Override

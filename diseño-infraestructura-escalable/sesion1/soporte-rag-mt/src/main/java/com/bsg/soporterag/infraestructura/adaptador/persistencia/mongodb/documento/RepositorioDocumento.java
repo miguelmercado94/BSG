@@ -57,4 +57,7 @@ public class RepositorioDocumento {
     /** Prefijo S3 (workarea) donde se almacenan los documentos de soporte del repo. */
     @Field("url_folder_s3_workarea")
     private String urlFolderS3Workarea;
+
+    @Field("tags")
+    private List<String> tags = new ArrayList<>(); // Lista de nombres de tags (referencia)
 }
