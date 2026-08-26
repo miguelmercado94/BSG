@@ -68,6 +68,13 @@ public class PgVectorAlmacenAdaptador implements AlmacenVectorialPort {
                 .then();
     }
 
+    @Override
+    public Flux<CoincidenciaVectorial> buscarPorDocumento(FuenteRag fuente, String namespace, String filePath) {
+        return Mono.fromCallable(() -> queryPorDocumento(fuente, namespace, filePath))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(Flux::fromIterable);
+    }
+
     private void borrarPorNamespace(String tabla, String namespace) {
         String sql = "DELETE FROM " + tabla + " WHERE namespace = ?";
         jdbc.update(sql, namespace);
@@ -135,5 +142,18 @@ public class PgVectorAlmacenAdaptador implements AlmacenVectorialPort {
                 rs.getInt("indice_fragmento"),
                 rs.getString("contenido"),
                 rs.getDouble("dist"));
+    }
+
+    private List<CoincidenciaVectorial> queryPorDocumento(FuenteRag fuente, String namespace, String filePath) {
+        String tabla = propiedades.nombreTabla(fuente);
+        String sql = String.format(
+                "SELECT fuente, indice_fragmento, contenido, 0.0 AS dist FROM %s WHERE namespace = ? AND fuente = ? ORDER BY indice_fragmento ASC",
+                tabla);
+        return jdbc.query(sql, (rs, rowNum) -> new CoincidenciaVectorial(
+                rs.getString("fuente"),
+                rs.getInt("indice_fragmento"),
+                rs.getString("contenido"),
+                rs.getDouble("dist")
+        ), namespace, filePath);
     }
 }

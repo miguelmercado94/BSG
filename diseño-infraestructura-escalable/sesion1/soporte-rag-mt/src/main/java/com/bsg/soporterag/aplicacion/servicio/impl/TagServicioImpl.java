@@ -23,7 +23,15 @@ public class TagServicioImpl implements TagServicio {
         if (!StringUtils.hasText(tag.getTag())) {
             return Mono.error(new IllegalArgumentException("El nombre del tag es obligatorio"));
         }
-        return tagRepositorioPort.guardar(tag);
+        // Validar unicidad
+        return tagRepositorioPort.buscarPorTags(tag.getTag())
+                .hasElements()
+                .flatMap(existe -> {
+                    if (existe) {
+                        return Mono.error(new IllegalArgumentException("Ya existe un tag con el nombre: " + tag.getTag()));
+                    }
+                    return tagRepositorioPort.guardar(tag);
+                });
     }
 
     @Override
@@ -45,13 +53,17 @@ public class TagServicioImpl implements TagServicio {
 
     @Override
     public Mono<Void> eliminarTag(String nombreTag) {
-        // Aquí se podría añadir lógica para desasociar este tag de todos los repositorios que lo usan
         return tagRepositorioPort.eliminarPorTag(nombreTag);
     }
 
     @Override
     public Flux<Tag> obtenerTodosLosTags() {
         return tagRepositorioPort.buscarTodos();
+    }
+
+    @Override
+    public Mono<Tag> obtenerTagPorNombre(String nombreTag) {
+        return tagRepositorioPort.buscarPorTags(nombreTag).next();
     }
 
     @Override

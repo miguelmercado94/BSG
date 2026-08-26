@@ -5,6 +5,26 @@ import type { FolderStructureDto } from "../types";
 /** Clave en el Set de expandidos para la carpeta raíz del repo (ej. "findu"). */
 const ROOT_KEY = "";
 
+/** Extensiones excluidas del embedding RAG — no se pueden arrastrar al chat. */
+const NON_EMBEDDABLE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "ico", "svg", "webp", "tiff", "bmp",
+  "mp3", "mp4", "wav", "avi", "mkv", "mov", "flv", "wmv", "ogg", "flac",
+  "woff", "woff2", "ttf", "eot", "otf",
+  "zip", "tar", "gz", "rar", "7z", "jar", "war", "ear", "exe", "dll", "so", "dylib", "bin",
+  "class", "o", "obj", "msi", "apk", "dmg",
+  "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp",
+  "drawio", "lock",
+]);
+
+function isEmbeddable(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith("ignore") || lower.includes(".ignore")) return false;
+  const dot = lower.lastIndexOf(".");
+  if (dot < 0) return true;
+  const ext = lower.slice(dot + 1);
+  return !NON_EMBEDDABLE_EXTENSIONS.has(ext);
+}
+
 type Props = {
   root: FolderStructureDto;
   onSelectFile: (relativePath: string) => void;
@@ -118,16 +138,27 @@ function FolderRows({
       {files.map((f) => {
         const rel = pathPrefix ? `${pathPrefix}/${f}` : f;
         const active = selectedPath === rel;
+        const embeddable = isEmbeddable(f);
         return (
           <li key={rel}>
             <div className="folder-tree__file-row">
               <button
                 type="button"
-                className={`folder-tree__file${active ? " is-active" : ""}`}
-                draggable
-                title="Clic para abrir · arrastra a la pregunta para insertar @[repo:ruta/completa] (mejor recuperación RAG)"
+                className={`folder-tree__file${active ? " is-active" : ""}${!embeddable ? " folder-tree__file--no-embed" : ""}`}
+                draggable={embeddable}
+                title={
+                  embeddable
+                    ? "Clic para abrir · arrastra a la pregunta para insertar @[repo:ruta] (RAG)"
+                    : "Archivo no indexado (binario/imagen) · solo visualización"
+                }
                 onClick={() => onSelectFile(rel)}
-                onDragStart={(e) => setDocvizFileMentionOnDataTransfer(e.dataTransfer, "repo", rel)}
+                onDragStart={(e) => {
+                  if (!embeddable) {
+                    e.preventDefault();
+                    return;
+                  }
+                  setDocvizFileMentionOnDataTransfer(e.dataTransfer, "repo", rel);
+                }}
               >
                 {f}
               </button>

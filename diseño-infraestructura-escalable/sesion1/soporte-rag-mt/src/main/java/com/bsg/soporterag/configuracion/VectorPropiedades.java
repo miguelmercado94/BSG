@@ -9,6 +9,8 @@ public record VectorPropiedades(
         int ragTopK,
         int chunkSize,
         int chunkOverlap,
+        int maxFileSizeMb,
+        int embeddingBatchSize,
         String embeddingsProvider,
         String tablaGit,
         String tablaSoporte

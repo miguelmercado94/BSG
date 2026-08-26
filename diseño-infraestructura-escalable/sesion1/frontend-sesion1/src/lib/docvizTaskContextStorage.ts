@@ -1,7 +1,7 @@
 const KEY = "docviz:workspaceTaskContext:v1";
 
 export type StoredTaskContext = {
-  taskId?: number;
+  taskId?: string;
   chatConversationId?: string | null;
   huCode: string;
   enunciado: string;

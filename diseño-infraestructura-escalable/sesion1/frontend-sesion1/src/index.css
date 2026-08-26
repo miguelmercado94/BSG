@@ -1098,9 +1098,22 @@ textarea {
 .workspace__sidebar-section--work {
   flex: 1 1 0;
   min-height: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  padding-top: 0.35rem;
-  margin-top: 0.25rem;
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.workspace__sidebar-divider {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  margin: 2px 8px;
+  transition: background 0.15s;
+}
+
+.workspace__sidebar-divider:hover {
+  background: rgba(138, 180, 248, 0.3);
 }
 
 .workspace__sidebar-section {
@@ -1113,8 +1126,9 @@ textarea {
 /* El árbol no debe ocupar toda la columna: deja sitio al área de trabajo más arriba */
 .workspace__sidebar-section--tree {
   flex: 0 1 auto;
-  min-height: 100px;
-  max-height: min(40vh, 340px);
+  min-height: 60px;
+  max-height: none;
+  overflow: hidden;
 }
 
 .workspace__sidebar-section--tree-only {
@@ -2106,6 +2120,16 @@ textarea {
   cursor: grabbing;
 }
 
+.folder-tree__file--no-embed {
+  opacity: 0.45;
+  cursor: default;
+  font-style: italic;
+}
+
+.folder-tree__file--no-embed:hover {
+  text-decoration: none;
+}
+
 .folder-tree__file-row {
   display: flex;
   align-items: center;
@@ -2879,26 +2903,23 @@ textarea {
 
 .admin-repo-form__tag-rhomb {
   box-sizing: border-box;
-  width: 2.85rem;
-  height: 2.85rem;
+  width: 3.5rem;
+  height: 3.5rem;
   display: grid;
   place-items: center;
-  transform: rotate(45deg);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.05);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
   color: #e8eaed;
   cursor: pointer;
   padding: 0;
   transition:
     background 0.15s ease,
-    border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
 
 .admin-repo-form__tag-rhomb:hover {
-  border-color: rgba(138, 180, 248, 0.55);
-  box-shadow: 0 0 0 1px rgba(138, 180, 248, 0.2);
+  background: rgba(138, 180, 248, 0.15);
 }
 
 .admin-repo-form__tag-rhomb:focus-visible {
@@ -2907,17 +2928,16 @@ textarea {
 }
 
 .admin-repo-form__tag-rhomb--on {
-  background: rgba(66, 133, 244, 0.38);
-  border-color: rgba(138, 180, 248, 0.65);
+  background: rgba(66, 133, 244, 0.5);
 }
 
 .admin-repo-form__tag-rhomb-inner {
-  transform: rotate(-45deg);
   font-size: 0.61rem;
   font-weight: 600;
   text-align: center;
   line-height: 1.12;
-  max-width: 3.35rem;
+  max-width: 3rem;
+  pointer-events: none;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;

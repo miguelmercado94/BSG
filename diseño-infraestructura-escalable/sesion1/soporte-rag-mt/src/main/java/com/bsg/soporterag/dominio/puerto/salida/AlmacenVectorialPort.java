@@ -17,6 +17,9 @@ public interface AlmacenVectorialPort {
 
     Flux<CoincidenciaVectorial> buscarSimilares(FuenteRag fuente, String namespace, float[] embedding, int topK);
 
+    /** Obtiene todos los chunks de un archivo específico (por filePath/fuente) ordenados por índice. */
+    Flux<CoincidenciaVectorial> buscarPorDocumento(FuenteRag fuente, String namespace, String filePath);
+
     Mono<Void> eliminarNamespace(FuenteRag fuente, String namespace);
 
     Mono<Void> eliminarDocumentos(FuenteRag fuente, String namespace, List<String> documentos);

@@ -146,4 +146,10 @@ public class GestionarTareaCasoUsoImpl implements GestionarTareaCasoUso {
                 })
                 .map(mapper::aResponse);
     }
+
+    @Override
+    public Mono<TareaResponseDto> obtenerTarea(String codigoTarea) {
+        return tareaServicio.obtenerPorCodigo(codigoTarea)
+                .map(mapper::aResponse);
+    }
 }

@@ -61,4 +61,11 @@ public class GestionarTareaControlador {
             @Parameter(description = "Código del usuario", required = true) @PathVariable String codigoUsuario) {
         return gestionarTareaCasoUso.obtenerTareasPorUsuario(codigoUsuario);
     }
+
+    @Operation(summary = "Obtener detalle de tarea", description = "Obtiene los detalles de una tarea incluyendo su historial de chat msgChat.")
+    @GetMapping("/{codigoTarea}")
+    public Mono<TareaResponseDto> obtenerTarea(
+            @Parameter(description = "Código de la tarea", required = true) @PathVariable String codigoTarea) {
+        return gestionarTareaCasoUso.obtenerTarea(codigoTarea);
+    }
 }

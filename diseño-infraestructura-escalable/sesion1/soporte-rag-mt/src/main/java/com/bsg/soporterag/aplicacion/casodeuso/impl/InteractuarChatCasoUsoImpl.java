@@ -40,6 +40,7 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
     private final TareaDtoMapper tareaDtoMapper;
     private final ServicioJGit servicioJGit;
     private final ServicioBucketS3 servicioBucketS3;
+    private final com.bsg.soporterag.dominio.puerto.salida.AlmacenVectorialPort almacenVectorialPort;
 
     public InteractuarChatCasoUsoImpl(
             TareaServicio tareaServicio,
@@ -50,7 +51,8 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
             VectorPropiedades vectorPropiedades,
             TareaDtoMapper tareaDtoMapper, 
             ServicioJGit servicioJGit, 
-            ServicioBucketS3 servicioBucketS3) {
+            ServicioBucketS3 servicioBucketS3,
+            com.bsg.soporterag.dominio.puerto.salida.AlmacenVectorialPort almacenVectorialPort) {
         this.tareaServicio = tareaServicio;
         this.repositorioServicio = repositorioServicio;
         this.tagServicio = tagServicio;
@@ -60,6 +62,7 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
         this.tareaDtoMapper = tareaDtoMapper;
         this.servicioJGit = servicioJGit;
         this.servicioBucketS3 = servicioBucketS3;
+        this.almacenVectorialPort = almacenVectorialPort;
     }
 
     @Override
@@ -124,20 +127,27 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
     }
 
     private Mono<String> construirContextoDesdeReferencias(Tarea tarea, List<ReferenciaContexto> referencias) {
-        return Flux.fromIterable(referencias)
-                .flatMap(ref -> {
-                    if ("repo".equals(ref.tipo())) {
-                        return servicioJGit.extraerContenidoArchivo(tarea.getUrlRepo(), null, ref.ruta()) // Asume rama principal
-                                .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
-                                .map(contenido -> "Contexto del archivo de repositorio '" + ref.ruta() + "':\n" + contenido);
-                    } else if ("soporte".equals(ref.tipo())) {
-                        return servicioBucketS3.obtenerArchivo(RolBucketS3.WORKAREA, ref.ruta())
-                                .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
-                                .map(contenido -> "Contexto del documento de soporte '" + ref.ruta() + "':\n" + contenido);
-                    }
-                    return Mono.empty();
+        return repositorioServicio.obtenerRepo(tarea.getUrlRepo())
+                .flatMap(repo -> {
+                    String ns = repo.getNamespace() != null ? repo.getNamespace() : tarea.getUrlRepo();
+                    return Flux.fromIterable(referencias)
+                            .flatMap(ref -> {
+                                FuenteRag fuente = "soporte".equals(ref.tipo()) ? FuenteRag.SOPORTE : FuenteRag.GIT;
+                                // Buscar todos los chunks del archivo embebido en pgvector
+                                return almacenVectorialPort.buscarPorDocumento(fuente, ns, ref.ruta())
+                                        .map(CoincidenciaVectorial::texto)
+                                        .collect(Collectors.joining("\n"))
+                                        .filter(contenido -> !contenido.isBlank())
+                                        .map(contenido -> "Contenido de '" + ref.ruta() + "':\n" + contenido)
+                                        .defaultIfEmpty("No se encontraron chunks embebidos para '" + ref.ruta() + "'")
+                                        .onErrorResume(e -> {
+                                            log.warn("Error buscando chunks para ref={}: {}", ref.ruta(), e.getMessage());
+                                            return Mono.just("Error al buscar '" + ref.ruta() + "': " + e.getMessage());
+                                        });
+                            })
+                            .collect(Collectors.joining("\n\n"))
+                            .defaultIfEmpty("");
                 })
-                .collect(Collectors.joining("\n\n"))
                 .defaultIfEmpty("");
     }
 
@@ -202,5 +212,57 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
         return chatServicio.resumirConversacion(tarea.getCodigoTarea() + "_resumen", contextoResumen)
                 .flatMap(nuevoResumen -> tareaServicio.actualizarResumen(tarea.getCodigoTarea(), nuevoResumen))
                 .then();
+    }
+
+    @Override
+    public Flux<String> conversarStream(String codigoTarea, ChatRequestDto request) {
+        if (!StringUtils.hasText(request.getMensaje())) {
+            return Flux.error(new IllegalArgumentException("El mensaje no puede estar vacío"));
+        }
+
+        return tareaServicio.obtenerPorCodigo(codigoTarea)
+                .flatMapMany(tarea -> {
+                    if (tarea.getEstadoTarea() != EstadoTarea.INICIADA) {
+                        return Flux.error(new IllegalStateException("Solo se puede chatear con tareas en estado INICIADA."));
+                    }
+
+                    // 1. Extraer referencias explícitas @[repo:...] y @[soporte:...]
+                    List<ReferenciaContexto> referencias = extraerReferencias(request.getMensaje());
+                    Mono<String> contextoDeReferencias = !referencias.isEmpty()
+                            ? construirContextoDesdeReferencias(tarea, referencias)
+                            : Mono.just("");
+
+                    // 2. Búsqueda RAG en pgvector usando el repo asociado a la tarea
+                    Mono<String> contextoRagMono = servicioBusquedaVectorial
+                            .buscarContexto(tarea.getUrlRepo(), request.getMensaje(), vectorPropiedades.ragTopK())
+                            .map(CoincidenciaVectorial::texto)
+                            .collect(Collectors.joining("\n---\n"))
+                            .defaultIfEmpty("");
+
+                    // 3. Historial (rolling summary + mensajes recientes)
+                    String contextoHistorial = construirContextoHistorial(tarea);
+
+                    // 4. Combinar todo: referencias + RAG + historial → stream a GPT
+                    return Mono.zip(contextoRagMono, contextoDeReferencias).flatMapMany(tuple -> {
+                        String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), contextoHistorial).trim();
+
+                        Flux<String> tokenStream = contextoFinal.isEmpty()
+                                ? chatServicio.conversarDirectoStream(codigoTarea, request.getMensaje())
+                                : chatServicio.conversarStream(codigoTarea, request.getMensaje(), contextoFinal);
+
+                        StringBuilder respuestaCompleta = new StringBuilder();
+
+                        return tokenStream
+                                .doOnNext(respuestaCompleta::append)
+                                .doOnError(err -> log.error("Error en tokenStream para tarea={}", codigoTarea, err))
+                                .doOnComplete(() -> {
+                                    guardarYProcesarResumen(tarea, request.getMensaje(), respuestaCompleta.toString())
+                                            .subscribe(
+                                                    msg -> log.debug("Mensaje persistido para tarea {}", codigoTarea),
+                                                    err -> log.error("Error persistiendo mensaje para tarea {}: {}", codigoTarea, err.getMessage())
+                                            );
+                                });
+                    });
+                });
     }
 }

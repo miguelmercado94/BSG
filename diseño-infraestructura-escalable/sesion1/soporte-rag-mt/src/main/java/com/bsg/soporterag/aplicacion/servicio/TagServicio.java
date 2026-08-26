@@ -11,6 +11,7 @@ public interface TagServicio {
     Mono<Tag> actualizarTag(String nombreTag, Tag tag);
     Mono<Void> eliminarTag(String nombreTag);
     Flux<Tag> obtenerTodosLosTags();
+    Mono<Tag> obtenerTagPorNombre(String nombreTag);
     Flux<Tag> obtenerTagsPorNombres(String... nombresTags);
 
     // --- Operaciones sobre la lista embebida de UrlToolTag ---

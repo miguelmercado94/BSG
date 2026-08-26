@@ -6,20 +6,16 @@ import { ChatMarkdown } from "../components/ChatMarkdown";
 import {
   adminAssignReposToCell,
   adminCreateCell,
+  adminCreateRepoStream,
   adminDeleteCellSupportMarkdown,
   adminDeletePendingRepo,
   adminDeletePendingSupportMarkdown,
   adminDeleteRepo,
   adminFetchPendingRepoFile,
-  adminAbortPendingIndex,
-  adminBeginPendingIndex,
-  adminFetchRepoDeleteImpact,
   adminFetchPendingRepoTree,
+  adminFetchRepoDeleteImpact,
   adminFetchRepoFile,
   adminFetchRepoTree,
-  adminFinishPendingIndex,
-  adminIngestOnePending,
-  adminListPendingIngestPaths,
   adminRepoUrlHint,
   adminUpdateCell,
   adminUpdateCellSupportMarkdown,
@@ -28,6 +24,7 @@ import {
   adminUploadPendingSupportMarkdown,
   fetchCellRepos,
   fetchCells,
+  fetchRepoBranches,
   fetchTextFromPresignedUrl,
   fetchTags,
   getUserId,
@@ -35,8 +32,8 @@ import {
   listSupportMarkdownObjects,
   newVectorNamespaceFromRepoName,
   parseGitRepoNameFromHttpsUrl,
+  updateRepo,
 } from "../api/client";
-import { randomUuid } from "../util/randomUuid";
 import type {
   CellRepoResponse,
   CellResponse,
@@ -50,10 +47,6 @@ type PendingIndexed = {
   clientId: string;
   repo: CellRepoResponse;
 };
-
-function newId(): string {
-  return randomUuid();
-}
 
 type IngestProgressState = {
   totalFiles: number;
@@ -131,7 +124,7 @@ function mergedRepos(
   existingRepos: CellRepoResponse[],
   pendingIndexed: PendingIndexed[],
 ): CellRepoResponse[] {
-  const m = new Map<number, CellRepoResponse>();
+  const m = new Map<string, CellRepoResponse>();
   if (!isNew) {
     for (const r of existingRepos) m.set(r.id, r);
   }
@@ -165,7 +158,7 @@ function SupportUploadGearIcon() {
 }
 
 type SupportRow = {
-  repoId: number;
+  repoId: string;
   repoName: string;
   obj: SupportMarkdownObjectDto;
 };
@@ -176,11 +169,11 @@ type ViewerState =
       kind: "repo";
       path: string;
       content: string;
-      repoId: number;
+      repoId: string;
     }
   | {
       kind: "support";
-      repoId: number;
+      repoId: string;
       fileName: string;
       content: string;
     };
@@ -199,8 +192,9 @@ export function AdminCellEditorPage() {
   const navigate = useNavigate();
   const isNew = useMatch({ path: "/admin/cells/new", end: true }) != null;
   const { cellId: cellIdStr } = useParams<{ cellId: string }>();
-  const cellId = cellIdStr != null ? Number.parseInt(cellIdStr, 10) : NaN;
+  const cellId = cellIdStr ?? "";
 
+  const [cellCode, setCellCode] = useState("");
   const [cellName, setCellName] = useState("");
   const [cellDescription, setCellDescription] = useState("");
   const [loadedCell, setLoadedCell] = useState<CellResponse | null>(null);
@@ -235,7 +229,7 @@ export function AdminCellEditorPage() {
   const [supportLoading, setSupportLoading] = useState(false);
 
   const [showSupportModal, setShowSupportModal] = useState(false);
-  const [supRepoId, setSupRepoId] = useState<number | "">("");
+  const [supRepoId, setSupRepoId] = useState<string | "">("");
   const [supHuCode, setSupHuCode] = useState("");
   const [supHuTitle, setSupHuTitle] = useState("");
   const [supFile, setSupFile] = useState<File | null>(null);
@@ -248,7 +242,7 @@ export function AdminCellEditorPage() {
   const [supportFilterFile, setSupportFilterFile] = useState("");
   const [supportFiltersOpen, setSupportFiltersOpen] = useState(false);
 
-  const [explorerRepoId, setExplorerRepoId] = useState<number | null>(null);
+  const [explorerRepoId, setExplorerRepoId] = useState<string | null>(null);
   const [explorerTree, setExplorerTree] = useState<FolderStructureDto | null>(null);
   const [explorerLoading, setExplorerLoading] = useState(false);
   const [explorerFileSelected, setExplorerFileSelected] = useState<string | null>(null);
@@ -271,10 +265,26 @@ export function AdminCellEditorPage() {
     null | { repo: CellRepoResponse; taskCount: number | null; loading: boolean }
   >(null);
 
+  /** Estado para el modal de edición de repositorio. */
+  const [editingRepo, setEditingRepo] = useState<CellRepoResponse | null>(null);
+  const [editRepoBranches, setEditRepoBranches] = useState<Array<{nombre: string; commit: string}>>([]);
+  const [editRepoBranchesLoading, setEditRepoBranchesLoading] = useState(false);
+  const [editRepoSelectedBranch, setEditRepoSelectedBranch] = useState("");
+  const [editRepoNamespace, setEditRepoNamespace] = useState("");
+  const [editRepoTags, setEditRepoTags] = useState<Set<string>>(new Set());
+  const [editRepoSaving, setEditRepoSaving] = useState(false);
+
   const reposCombined = useMemo(
     () => mergedRepos(isNew, existingRepos, pendingIndexed),
     [isNew, existingRepos, pendingIndexed],
   );
+
+  const activeRepoFilesCount = useMemo(() => {
+    if (explorerRepoId == null) return 0;
+    const r = reposCombined.find((x) => x.id === explorerRepoId);
+    return (r?.filesPath?.length ?? 0) || (r?.lastIngestFiles ?? 0);
+  }, [reposCombined, explorerRepoId]);
+
 
   const filteredSupportRows = useMemo(() => {
     const rid = supportFilterRepoId.trim();
@@ -293,7 +303,7 @@ export function AdminCellEditorPage() {
   const effectiveCellId = !isNew && loadedCell ? loadedCell.id : null;
   /** Repo indexado en esta sesión pero aún no asignado a la célula en BD → rutas `/pending/*`. */
   const repoIdIsPending = useCallback(
-    (repoId: number) => pendingIndexed.some((p) => p.repo.id === repoId),
+    (repoId: string) => pendingIndexed.some((p) => p.repo.id === repoId),
     [pendingIndexed],
   );
   const hasRepos = reposCombined.length > 0;
@@ -347,7 +357,7 @@ export function AdminCellEditorPage() {
   }, [navigate]);
 
   useEffect(() => {
-    if (isNew || Number.isNaN(cellId)) return;
+    if (isNew || !cellId) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -445,7 +455,7 @@ export function AdminCellEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [explorerRepoId, effectiveCellId, repoIdIsPending]);
+  }, [explorerRepoId, effectiveCellId, repoIdIsPending, activeRepoFilesCount]);
 
   const refreshRepoHint = useCallback(
     async (url: string, localPath: string, mode: GitConnectionMode) => {
@@ -550,82 +560,30 @@ export function AdminCellEditorPage() {
       credentialPlain: repoToken,
     });
     setIndexingAdd(true);
-    setAddProgress({
-      totalFiles: 0,
-      filesProcessed: 0,
-      chunksIndexed: 0,
-      currentFile: null,
-      detail: null,
-      skippedHint: null,
-    });
-    let repoId: number | null = null;
     try {
-      const begin = await adminBeginPendingIndex(body);
-      if (begin.linkedWithoutReindex) {
-        setPendingIndexed((prev) =>
-          prev.some((p) => p.repo.id === begin.repo.id)
-            ? prev
-            : [...prev, { clientId: newId(), repo: begin.repo }],
-        );
-        setRepoUrl("");
-        setRepoLocalPath("");
-        setRepoDisplayName("");
-        setRepoNamespace("");
-        setRepoTags("");
-        setRepoTagPresetSelected(new Set());
-        setRepoTagsExtra("");
-        setRepoToken("");
-        setHintReuse(false);
-        setRepoDefaultBranch("");
-        setShowRepoForm(false);
-        return;
-      }
-      repoId = begin.repo.id;
-      const paths = await adminListPendingIngestPaths(repoId);
-      const fileErrors: string[] = [];
-      setAddProgress({
-        totalFiles: paths.length,
-        filesProcessed: 0,
-        chunksIndexed: 0,
-        currentFile: null,
-        detail:
-          paths.length === 0
-            ? "Sin archivos de texto para indexar en esta revisión (solo binarios u omitidos por tipo)."
-            : "Obteniendo lista de archivos…",
-        skippedHint: null,
+      const res = await adminCreateRepoStream(cellId, body, (ev) => {
+        if (ev.phase === "START") {
+          setAddProgress({
+            totalFiles: 0,
+            filesProcessed: 0,
+            chunksIndexed: 0,
+            currentFile: null,
+            detail: "Clonando repositorio...",
+            skippedHint: null,
+          });
+        } else if (ev.phase === "PROGRESS") {
+          setAddProgress({
+            totalFiles: ev.totalFiles ?? 0,
+            filesProcessed: ev.filesProcessed ?? 0,
+            chunksIndexed: ev.chunksIndexed ?? 0,
+            currentFile: ev.currentFile ?? null,
+            detail: ev.detail ?? "Indexando...",
+            skippedHint: summarizeSkippedPaths(ev.skipped),
+          });
+        }
       });
-      let filesDone = 0;
-      let chunksTotal = 0;
-      for (const path of paths) {
-        const r = await adminIngestOnePending(repoId, path);
-        if (r.errorMessage) {
-          fileErrors.push(`${path}: ${r.errorMessage}`);
-        } else if (r.skipped && r.skipReason) {
-          fileErrors.push(`${path}: ${r.skipReason}`);
-        }
-        if (r.indexed) {
-          filesDone += 1;
-          chunksTotal += r.chunksIndexed;
-        }
-        const hint =
-          fileErrors.length === 0
-            ? null
-            : fileErrors.length <= 2
-              ? fileErrors.join("; ")
-              : `${fileErrors.slice(0, 2).join("; ")} (+${fileErrors.length - 2} más)`;
-        setAddProgress({
-          totalFiles: paths.length,
-          filesProcessed: filesDone,
-          chunksIndexed: chunksTotal,
-          currentFile: path,
-          detail: r.indexed ? `Fragmentos en este archivo: ${r.chunksIndexed}` : null,
-          skippedHint: hint,
-        });
-      }
-      const res = await adminFinishPendingIndex(repoId);
-      repoId = null;
-      setPendingIndexed((prev) =>
-        prev.some((p) => p.repo.id === res.id) ? prev : [...prev, { clientId: newId(), repo: res }],
+      setExistingRepos((prev) =>
+        prev.some((p) => p.id === res.id) ? prev : [...prev, res]
       );
       setRepoUrl("");
       setRepoLocalPath("");
@@ -638,23 +596,10 @@ export function AdminCellEditorPage() {
       setHintReuse(false);
       setRepoDefaultBranch("");
       setShowRepoForm(false);
-      if (fileErrors.length > 0) {
-        setErr(
-          `Indexación completada con avisos (${fileErrors.length}): ${fileErrors.slice(0, 3).join("; ")}${
-            fileErrors.length > 3 ? "…" : ""
-          }`,
-        );
-      }
+      void refreshSupports();
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
     } finally {
-      if (repoId != null) {
-        try {
-          await adminAbortPendingIndex(repoId);
-        } catch {
-          /* ignorar: sesión ya cerrada en el servidor */
-        }
-      }
       setIndexingAdd(false);
       setAddProgress(null);
     }
@@ -699,6 +644,58 @@ export function AdminCellEditorPage() {
     }
   }
 
+  async function openEditRepoModal(r: CellRepoResponse) {
+    setEditingRepo(r);
+    setEditRepoSelectedBranch(r.ramaPrincipal || "");
+    setEditRepoNamespace(r.vectorNamespace || "");
+    // Initialize tags from repo's tagsCsv
+    const currentTags = r.tagsCsv ? r.tagsCsv.split(",").map((t) => t.trim()).filter(Boolean) : [];
+    setEditRepoTags(new Set(currentTags));
+    setEditRepoBranches([]);
+    setEditRepoBranchesLoading(true);
+    try {
+      // Ensure tag catalog is loaded
+      if (!tagCatalog || tagCatalog.tags.length === 0) {
+        const cats = await fetchTags();
+        setTagCatalog(cats);
+      }
+      const branches = await fetchRepoBranches(r.repositoryUrl);
+      setEditRepoBranches(branches);
+      if (!r.ramaPrincipal && branches.length > 0) {
+        setEditRepoSelectedBranch(branches[0].nombre);
+      }
+    } catch {
+      // Ignore — branches list stays empty
+    } finally {
+      setEditRepoBranchesLoading(false);
+    }
+  }
+
+  async function submitEditRepo() {
+    if (!editingRepo) return;
+    setEditRepoSaving(true);
+    setErr(null);
+    try {
+      await updateRepo({
+        url: editingRepo.repositoryUrl,
+        ramaPrincipal: editRepoSelectedBranch || undefined,
+        tags: Array.from(editRepoTags),
+      });
+      // Wait briefly for the backend to finish updating state
+      await new Promise((r) => setTimeout(r, 1000));
+      // Refresh repos to reflect changes
+      if (cellId) {
+        const repos = await fetchCellRepos(cellId);
+        setExistingRepos(repos);
+      }
+      setEditingRepo(null);
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : String(ex));
+    } finally {
+      setEditRepoSaving(false);
+    }
+  }
+
   async function openRepoViewer(relPath: string) {
     if (explorerRepoId == null) return;
     setViewerLoading(true);
@@ -718,7 +715,7 @@ export function AdminCellEditorPage() {
     }
   }
 
-  async function openSupportViewer(repoId: number, fileName: string, url: string) {
+  async function openSupportViewer(repoId: string, fileName: string, url: string) {
     setViewerLoading(true);
     setErr(null);
     try {
@@ -800,15 +797,20 @@ export function AdminCellEditorPage() {
   async function onSave(e: FormEvent) {
     e.preventDefault();
     setErr(null);
+    if (isNew && !cellCode.trim()) {
+      setErr("El código de la célula es obligatorio.");
+      return;
+    }
     if (!cellName.trim()) {
       setErr("El nombre de la célula es obligatorio.");
       return;
     }
     setSaving(true);
     try {
-      let targetCellId: number;
+      let targetCellId: string;
       if (isNew) {
         const created = await adminCreateCell({
+          code: cellCode.trim(),
           name: cellName.trim(),
           description: cellDescription.trim() || undefined,
         });
@@ -892,7 +894,7 @@ export function AdminCellEditorPage() {
     navigate("/admin/cells");
   }
 
-  if (!isNew && Number.isNaN(cellId)) {
+  if (!isNew && !cellId) {
     return (
       <div className="page connect-page">
         <p className="muted">Ruta no válida.</p>
@@ -939,6 +941,10 @@ export function AdminCellEditorPage() {
                 {isNew ? (
                   <>
                     <p className="admin-cell-editor__cell-identity-eyebrow">Nueva célula</p>
+                    <label className="field">
+                      <span>Código de célula</span>
+                      <input value={cellCode} onChange={(ev) => setCellCode(ev.target.value)} required maxLength={50} />
+                    </label>
                     <label className="field">
                       <span>Nombre (identificador único)</span>
                       <input value={cellName} onChange={(ev) => setCellName(ev.target.value)} required maxLength={200} />
@@ -1007,482 +1013,491 @@ export function AdminCellEditorPage() {
                 )}
               </section>
 
-              <section className="card">
-                <div className="admin-cell-editor__repo-actions">
-                  <h2 className="h3">Repositorios actuales</h2>
-                  <button
-                    type="button"
-                    className="admin-cell-editor__fab-green"
-                    title="Agregar repositorio"
-                    aria-label="Agregar repositorio"
-                    disabled={indexingAdd || saving}
-                    onClick={() => setShowRepoForm((v) => !v)}
-                  >
-                    +
-                  </button>
-                </div>
+              {!isNew && (
+                <>
+                  <section className="card">
+                    <div className="admin-cell-editor__repo-actions">
+                      <h2 className="h3">Repositorios actuales</h2>
+                      <button
+                        type="button"
+                        className="admin-cell-editor__fab-green"
+                        title="Agregar repositorio"
+                        aria-label="Agregar repositorio"
+                        disabled={indexingAdd || saving}
+                        onClick={() => setShowRepoForm((v) => !v)}
+                      >
+                        +
+                      </button>
+                    </div>
 
-                {!isNew && existingRepos.length > 0 && (
-                  <ul className="admin-cell-editor__repo-list">
-                    {existingRepos.map((r) => (
-                      <li key={r.id} className="admin-cell-editor__repo-li">
-                        <span>
-                          <strong>{r.displayName}</strong>
-                          {r.linkedWithoutReindex && (
-                            <span className="muted small"> · enlazado sin reindexar</span>
-                          )}
-                          {r.lastIngestAt != null && (
-                            <span className="muted small">
-                              {" "}
-                              · {r.lastIngestFiles ?? 0} arch., {r.lastIngestChunks ?? 0} frag.
+                    {!isNew && existingRepos.length > 0 && (
+                      <ul className="admin-cell-editor__repo-list">
+                        {existingRepos.map((r) => (
+                          <li
+                            key={r.id}
+                            className={"admin-cell-editor__repo-li" + (supportFilterRepoId === String(r.id) ? " admin-cell-editor__repo-li--selected" : "")}
+                            style={{ cursor: "pointer" }}
+                            onClick={() => setSupportFilterRepoId(supportFilterRepoId === String(r.id) ? "" : String(r.id))}
+                          >
+                            <span>
+                              <strong>{r.displayName}</strong>
+                              {(r.lastIngestChunks != null && r.lastIngestChunks > 0) || r.indexado ? (
+                                <span className="small" style={{ color: "#16a34a" }}> · ✓ indexado</span>
+                              ) : (
+                                <span className="small" style={{ color: "#d97706" }}> · ⚠ sin indexar</span>
+                              )}
+                              {r.lastIngestAt != null && (
+                                <span className="muted small">
+                                  {" "}
+                                  · {r.lastIngestFiles ?? 0} arch., {r.lastIngestChunks ?? 0} frag.
+                                </span>
+                              )}
+                              {r.lastIngestSkipped != null && r.lastIngestSkipped.length > 0 && (
+                                <span
+                                  className="muted small"
+                                  title={r.lastIngestSkipped.join("\n")}
+                                >
+                                  {" "}
+                                  · omitidos: {summarizeSkippedPaths(r.lastIngestSkipped)}
+                                </span>
+                              )}
                             </span>
-                          )}
-                          {r.lastIngestSkipped != null && r.lastIngestSkipped.length > 0 && (
-                            <span
-                              className="muted small"
-                              title={r.lastIngestSkipped.join("\n")}
+                            <span className="admin-cell-editor__row-actions">
+                              <button
+                                type="button"
+                                className="admin-icon-btn"
+                                title="Editar repositorio"
+                                aria-label="Editar repositorio"
+                                disabled={indexingAdd || saving}
+                                onClick={() => void openEditRepoModal(r)}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                                  <path
+                                    fill="currentColor"
+                                    d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.41l-2.34-2.34a1.003 1.003 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"
+                                  />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                className="admin-icon-btn admin-icon-btn--danger"
+                                title="Quitar de la célula"
+                                aria-label="Eliminar repositorio"
+                                disabled={repoDeleteModal?.loading}
+                                onClick={() => void openRemoveRepoModal(r)}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {pendingIndexed.length > 0 && (
+                      <ul className="admin-cell-editor__staged">
+                        {pendingIndexed.map((p) => (
+                          <li key={p.clientId} className="admin-cell-editor__staged-li">
+                            <span>
+                              <strong>{p.repo.displayName}</strong>{" "}
+                              <span className="muted small">
+                                {p.repo.connectionMode} · {p.repo.vectorNamespace ?? ""}
+                                {p.repo.lastIngestFiles != null && (
+                                  <>
+                                    {" "}
+                                    · {p.repo.lastIngestFiles} arch., {p.repo.lastIngestChunks ?? 0} frag.
+                                  </>
+                                )}
+                                {p.repo.lastIngestSkipped != null && p.repo.lastIngestSkipped.length > 0 && (
+                                  <>
+                                    {" "}
+                                    · omitidos: {summarizeSkippedPaths(p.repo.lastIngestSkipped)}
+                                  </>
+                                )}
+                                <span className="muted"> · pendiente de guardar</span>
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              className="admin-icon-btn admin-icon-btn--danger"
+                              aria-label="Quitar y borrar indexación"
+                              title="Elimina el repo pendiente y su indexación"
+                              disabled={indexingAdd || saving}
+                              onClick={() => removePendingIndexed(p)}
                             >
-                              {" "}
-                              · omitidos: {summarizeSkippedPaths(r.lastIngestSkipped)}
-                            </span>
-                          )}
-                        </span>
-                        <button
-                          type="button"
-                          className="admin-icon-btn admin-icon-btn--danger"
-                          title="Quitar de la célula"
-                          aria-label="Eliminar repositorio"
-                          disabled={repoDeleteModal?.loading}
-                          onClick={() => void openRemoveRepoModal(r)}
-                        >
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {pendingIndexed.length > 0 && (
-                  <ul className="admin-cell-editor__staged">
-                    {pendingIndexed.map((p) => (
-                      <li key={p.clientId} className="admin-cell-editor__staged-li">
-                        <span>
-                          <strong>{p.repo.displayName}</strong>{" "}
-                          <span className="muted small">
-                            {p.repo.connectionMode} · {p.repo.vectorNamespace ?? ""}
-                            {p.repo.lastIngestFiles != null && (
-                              <>
-                                {" "}
-                                · {p.repo.lastIngestFiles} arch., {p.repo.lastIngestChunks ?? 0} frag.
-                              </>
-                            )}
-                            {p.repo.lastIngestSkipped != null && p.repo.lastIngestSkipped.length > 0 && (
-                              <>
-                                {" "}
-                                · omitidos: {summarizeSkippedPaths(p.repo.lastIngestSkipped)}
-                              </>
-                            )}
-                            <span className="muted"> · pendiente de guardar</span>
-                          </span>
-                        </span>
-                        <button
-                          type="button"
-                          className="admin-icon-btn admin-icon-btn--danger"
-                          aria-label="Quitar y borrar indexación"
-                          title="Elimina el repo pendiente y su indexación"
-                          disabled={indexingAdd || saving}
-                          onClick={() => removePendingIndexed(p)}
-                        >
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {showRepoForm && (
-                  <div className="admin-repo-form admin-repo-form--panel">
-                    <label className="field">
-                      <span>Modo</span>
-                      <select
-                        value={repoMode}
-                        onChange={(ev) => {
-                          const m = ev.target.value as GitConnectionMode;
-                          setRepoMode(m);
-                          void refreshRepoHint(repoUrl, repoLocalPath, m);
-                        }}
-                      >
-                        <option value="HTTPS_PUBLIC">HTTPS público</option>
-                        <option value="HTTPS_AUTH">HTTPS con token</option>
-                        <option value="LOCAL">Ruta local</option>
-                      </select>
-                    </label>
-                    {repoMode !== "LOCAL" ? (
-                      <label className="field">
-                        <span>URL del repositorio</span>
-                        <input
-                          value={repoUrl}
-                          onChange={(ev) => onRepoUrlInput(ev.target.value)}
-                          onPaste={(ev) => {
-                            const el = ev.currentTarget;
-                            window.setTimeout(() => onRepoUrlInput(el.value), 0);
-                          }}
-                          autoComplete="off"
-                        />
-                      </label>
-                    ) : (
-                      <label className="field">
-                        <span>Ruta local</span>
-                        <input
-                          value={repoLocalPath}
-                          onChange={(ev) => {
-                            const v = ev.target.value;
-                            setRepoLocalPath(v);
-                            void refreshRepoHint(repoUrl, v, "LOCAL");
-                          }}
-                          autoComplete="off"
-                        />
-                      </label>
+                              ×
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
                     )}
-                    {repoMode === "HTTPS_AUTH" && (
-                      <>
+
+                    {showRepoForm && (
+                      <div className="admin-repo-form admin-repo-form--panel">
                         <label className="field">
-                          <span>Usuario Git (opcional)</span>
-                          <input value={repoUser} onChange={(ev) => setRepoUser(ev.target.value)} />
-                        </label>
-                        <label className="field">
-                          <span>Token / contraseña</span>
-                          <input
-                            type="password"
-                            value={repoToken}
-                            onChange={(ev) => setRepoToken(ev.target.value)}
-                            autoComplete="off"
-                          />
-                        </label>
-                      </>
-                    )}
-                    <label className="field">
-                      <span>Rama principal (detectada)</span>
-                      <input
-                        className="admin-repo-form__auto-field"
-                        value={repoHintLoading ? "…" : repoDefaultBranch || "—"}
-                        readOnly
-                        disabled
-                        tabIndex={-1}
-                        title="Rama por defecto del remoto (HEAD) o rama actual en ruta local. Se obtiene al validar la URL o la ruta."
-                        aria-readonly="true"
-                      />
-                      {!repoHintLoading && repoDefaultBranch === "" && repoMode !== "LOCAL" && repoUrl.trim().endsWith(".git") && (
-                        <span className="muted small">No se pudo leer el remoto (red privada o URL incorrecta).</span>
-                      )}
-                    </label>
-                    <label className="field">
-                      <span>Nombre visible</span>
-                      <input
-                        className="admin-repo-form__auto-field"
-                        value={repoDisplayName}
-                        readOnly
-                        tabIndex={-1}
-                        placeholder="Se rellena al indicar la URL (terminada en .git) o ruta"
-                      />
-                      {repoHintLoading && <span className="muted small">Sincronizando con el servidor…</span>}
-                      {hintReuse && !repoHintLoading && (
-                        <span className="muted small">Datos reutilizados del repositorio ya registrado.</span>
-                      )}
-                    </label>
-                    <label className="field">
-                      <span>Namespace vectorial</span>
-                      <input
-                        className="admin-repo-form__auto-field"
-                        value={repoNamespace}
-                        readOnly
-                        tabIndex={-1}
-                        placeholder="Se genera al completar la URL"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Etiquetas (catálogo)</span>
-                      <p className="muted small" style={{ margin: "0 0 0.5rem" }}>
-                        Rombo = uno o varios; opcional: otras etiquetas debajo. El backend usa estos tags para sugerir URLs de
-                        documentación (@tools) en el chat RAG.
-                      </p>
-                      <div
-                        className="admin-repo-form__tag-rhombs"
-                        role="group"
-                        aria-label="Etiquetas del catálogo DocViz"
-                      >
-                        {(tagCatalog?.tags ?? []).map((tag) => (
-                          <button
-                            key={tag}
-                            type="button"
-                            className={
-                              "admin-repo-form__tag-rhomb" +
-                              (repoTagPresetSelected.has(tag) ? " admin-repo-form__tag-rhomb--on" : "")
-                            }
-                            title={
-                              tagCatalog?.toolsByTag?.[tag]
-                                ?.map((t) => `${t.title} (${t.url})`)
-                                .join(" · ") ?? tag
-                            }
-                            aria-pressed={repoTagPresetSelected.has(tag)}
-                            onClick={() => {
-                              setRepoTagPresetSelected((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(tag)) next.delete(tag);
-                                else next.add(tag);
-                                return next;
-                              });
+                          <span>Modo</span>
+                          <select
+                            value={repoMode}
+                            onChange={(ev) => {
+                              const m = ev.target.value as GitConnectionMode;
+                              setRepoMode(m);
+                              void refreshRepoHint(repoUrl, repoLocalPath, m);
                             }}
                           >
-                            <span className="admin-repo-form__tag-rhomb-inner">{tag}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </label>
-                    <label className="field">
-                      <span>Otras etiquetas (CSV, opcional)</span>
-                      <input
-                        value={repoTagsExtra}
-                        onChange={(ev) => setRepoTagsExtra(ev.target.value)}
-                        placeholder="ej. docs-internos, kotlin"
-                        autoComplete="off"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="btn primary admin-repo-form__add-to-list"
-                      disabled={indexingAdd || saving}
-                      onClick={() => void addAndIndexRepo()}
-                    >
-                      {indexingAdd ? "Indexando…" : "Añadir al listado"}
-                    </button>
-                    {indexingAdd && addProgress && (
-                      <div className="ingest-progress ingest-progress--bar admin-cell-editor__ingest-box" aria-live="polite">
-                        <p className="ingest-progress__lead ingest-progress__lead--bar small muted">
-                          Indexando → vector…
-                        </p>
-                        {addProgress.currentFile ? (
-                          <div
-                            className="ingest-progress__file ingest-progress__file--bar ingest-progress__file--primary"
-                            title={addProgress.currentFile}
-                          >
-                            <span className="muted">Archivo actual:</span>{" "}
-                            <code className="ingest-progress__file-path">{addProgress.currentFile}</code>
-                          </div>
-                        ) : null}
-                        <div className="ingest-progress__stats ingest-progress__stats--bar">
-                          {addProgress.totalFiles > 0 ? (
-                            <>
-                              Archivos:{" "}
-                              <strong>
-                                {addProgress.filesProcessed} / {addProgress.totalFiles}
-                              </strong>
-                              <span className="muted"> · Chunks: {addProgress.chunksIndexed}</span>
-                            </>
-                          ) : (
-                            <span className="muted">
-                              {addProgress.detail?.trim()
-                                ? addProgress.detail
-                                : "Preparando… (si acabas de pulsar, primero se clona el repo; puede tardar sin barra de porcentaje)."}
-                            </span>
+                            <option value="HTTPS_PUBLIC">HTTPS público</option>
+                            <option value="HTTPS_AUTH">HTTPS con token</option>
+                            <option value="LOCAL">Ruta local</option>
+                          </select>
+                        </label>
+                        {repoMode !== "LOCAL" ? (
+                          <label className="field">
+                            <span>URL del repositorio</span>
+                            <input
+                              value={repoUrl}
+                              onChange={(ev) => onRepoUrlInput(ev.target.value)}
+                              onPaste={(ev) => {
+                                const el = ev.currentTarget;
+                                window.setTimeout(() => onRepoUrlInput(el.value), 0);
+                              }}
+                              autoComplete="off"
+                            />
+                          </label>
+                        ) : (
+                          <label className="field">
+                            <span>Ruta local</span>
+                            <input
+                              value={repoLocalPath}
+                              onChange={(ev) => {
+                                const v = ev.target.value;
+                                setRepoLocalPath(v);
+                                void refreshRepoHint(repoUrl, v, "LOCAL");
+                              }}
+                              autoComplete="off"
+                            />
+                          </label>
+                        )}
+                        {repoMode === "HTTPS_AUTH" && (
+                          <>
+                            <label className="field">
+                              <span>Usuario Git (opcional)</span>
+                              <input value={repoUser} onChange={(ev) => setRepoUser(ev.target.value)} />
+                            </label>
+                            <label className="field">
+                              <span>Token / contraseña</span>
+                              <input
+                                type="password"
+                                value={repoToken}
+                                onChange={(ev) => setRepoToken(ev.target.value)}
+                                autoComplete="off"
+                              />
+                            </label>
+                          </>
+                        )}
+                        <label className="field">
+                          <span>Rama principal (detectada)</span>
+                          <input
+                            className="admin-repo-form__auto-field"
+                            value={repoHintLoading ? "…" : repoDefaultBranch || "—"}
+                            readOnly
+                            disabled
+                            tabIndex={-1}
+                            title="Rama por defecto del remoto (HEAD) o rama actual en ruta local. Se obtiene al validar la URL o la ruta."
+                            aria-readonly="true"
+                          />
+                          {!repoHintLoading && repoDefaultBranch === "" && repoMode !== "LOCAL" && repoUrl.trim().endsWith(".git") && (
+                            <span className="muted small">No se pudo leer el remoto (red privada o URL incorrecta).</span>
                           )}
-                        </div>
-                        {addProgress.detail && addProgress.totalFiles > 0 ? (
-                          <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
-                            {addProgress.detail}
+                        </label>
+                        <label className="field">
+                          <span>Nombre visible</span>
+                          <input
+                            className="admin-repo-form__auto-field"
+                            value={repoDisplayName}
+                            readOnly
+                            tabIndex={-1}
+                            placeholder="Se rellena al indicar la URL (terminada en .git) o ruta"
+                          />
+                          {repoHintLoading && <span className="muted small">Sincronizando con el servidor…</span>}
+                          {hintReuse && !repoHintLoading && (
+                            <span className="muted small">Datos reutilizados del repositorio ya registrado.</span>
+                          )}
+                        </label>
+                        <label className="field">
+                          <span>Etiquetas (catálogo)</span>
+                          <p className="muted small" style={{ margin: "0 0 0.5rem" }}>
+                            Rombo = uno o varios; opcional: otras etiquetas debajo. El backend usa estos tags para sugerir URLs de
+                            documentación (@tools) en el chat RAG.
+                          </p>
+                          <div
+                            className="admin-repo-form__tag-rhombs"
+                            role="group"
+                            aria-label="Etiquetas del catálogo DocViz"
+                          >
+                            {(tagCatalog?.tags ?? []).map((tag) => (
+                              <button
+                                key={tag}
+                                type="button"
+                                className={
+                                  "admin-repo-form__tag-rhomb" +
+                                  (repoTagPresetSelected.has(tag) ? " admin-repo-form__tag-rhomb--on" : "")
+                                }
+                                title={
+                                  tagCatalog?.toolsByTag?.[tag]
+                                    ?.map((t) => `${t.title} (${t.url})`)
+                                    .join(" · ") ?? tag
+                                }
+                                aria-pressed={repoTagPresetSelected.has(tag)}
+                                onClick={() => {
+                                  setRepoTagPresetSelected((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(tag)) next.delete(tag);
+                                    else next.add(tag);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <span className="admin-repo-form__tag-rhomb-inner">{tag}</span>
+                              </button>
+                            ))}
                           </div>
-                        ) : null}
-                        {addProgress.skippedHint && (
-                          <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
-                            Omisiones o fallos: {addProgress.skippedHint}
+                        </label>
+                        <button
+                          type="button"
+                          className="btn primary admin-repo-form__add-to-list"
+                          disabled={indexingAdd || saving}
+                          onClick={() => void addAndIndexRepo()}
+                        >
+                          {indexingAdd ? "Indexando…" : "Añadir al listado"}
+                        </button>
+                        {indexingAdd && addProgress && (
+                          <div className="ingest-progress ingest-progress--bar admin-cell-editor__ingest-box" aria-live="polite">
+                            <p className="ingest-progress__lead ingest-progress__lead--bar small muted">
+                              Indexando → vector…
+                            </p>
+                            {addProgress.currentFile ? (
+                              <div
+                                className="ingest-progress__file ingest-progress__file--bar ingest-progress__file--primary"
+                                title={addProgress.currentFile}
+                              >
+                                <span className="muted">Archivo actual:</span>{" "}
+                                <code className="ingest-progress__file-path">{addProgress.currentFile}</code>
+                              </div>
+                            ) : null}
+                            <div className="ingest-progress__stats ingest-progress__stats--bar">
+                              {addProgress.totalFiles > 0 ? (
+                                <>
+                                  Archivos:{" "}
+                                  <strong>
+                                    {addProgress.filesProcessed} / {addProgress.totalFiles}
+                                  </strong>
+                                  <span className="muted"> · Chunks: {addProgress.chunksIndexed}</span>
+                                </>
+                              ) : (
+                                <span className="muted">
+                                  {addProgress.detail?.trim()
+                                    ? addProgress.detail
+                                    : "Preparando… (si acabas de pulsar, primero se clona el repo; puede tardar sin barra de porcentaje)."}
+                                </span>
+                              )}
+                            </div>
+                            {addProgress.detail && addProgress.totalFiles > 0 ? (
+                              <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
+                                {addProgress.detail}
+                              </div>
+                            ) : null}
+                            {addProgress.skippedHint && (
+                              <div className="ingest-progress__detail ingest-progress__detail--bar small muted">
+                                Omisiones o fallos: {addProgress.skippedHint}
+                              </div>
+                            )}
+                            <div
+                              className={
+                                "ingest-progress__track ingest-progress__track--bar" +
+                                (addProgress.totalFiles === 0 ? " ingest-progress__track--indeterminate" : "")
+                              }
+                            >
+                              <div
+                                className="ingest-progress__fill"
+                                style={{
+                                  width:
+                                    addProgress.totalFiles > 0
+                                      ? `${Math.min(
+                                          100,
+                                          (addProgress.filesProcessed / addProgress.totalFiles) * 100,
+                                        )}%`
+                                      : "30%",
+                                }}
+                              />
+                            </div>
                           </div>
                         )}
-                        <div
-                          className={
-                            "ingest-progress__track ingest-progress__track--bar" +
-                            (addProgress.totalFiles === 0 ? " ingest-progress__track--indeterminate" : "")
-                          }
-                        >
-                          <div
-                            className="ingest-progress__fill"
-                            style={{
-                              width:
-                                addProgress.totalFiles > 0
-                                  ? `${Math.min(
-                                      100,
-                                      (addProgress.filesProcessed / addProgress.totalFiles) * 100,
-                                    )}%`
-                                  : "30%",
-                            }}
-                          />
-                        </div>
                       </div>
                     )}
-                  </div>
-                )}
-              </section>
+                  </section>
 
-              <section className="card admin-cell-editor__soportes-card">
-                <div
-                  className={
-                    supportEmpty
-                      ? "admin-cell-editor__soportes-header admin-cell-editor__soportes-header--empty"
-                      : "admin-cell-editor__soportes-header"
-                  }
-                >
-                  <h2 className="h3">Soportes {soporteTitle}</h2>
-                  <div className="admin-cell-editor__soportes-header-actions">
-                    {!supportEmpty && supportRows.length > 0 && (
-                      <button
-                        type="button"
-                        className={
-                          "admin-cell-editor__soportes-filter-toggle" +
-                          (supportFiltersOpen ? " is-open" : "") +
-                          (supportFilterRepoId !== "" ||
-                          supportFilterHu.trim() !== "" ||
-                          supportFilterFile.trim() !== ""
-                            ? " has-active-filters"
-                            : "")
-                        }
-                        title={supportFiltersOpen ? "Ocultar filtros" : "Mostrar filtros"}
-                        aria-expanded={supportFiltersOpen}
-                        aria-controls="admin-soportes-filters-panel"
-                        id="admin-soportes-filter-trigger"
-                        onClick={() => setSupportFiltersOpen((o) => !o)}
-                      >
-                        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
-                          <path
-                            fill="currentColor"
-                            d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"
-                          />
-                        </svg>
-                      </button>
-                    )}
-                    <button
-                      type="button"
+                  <section className="card admin-cell-editor__soportes-card">
+                    <div
                       className={
                         supportEmpty
-                          ? "admin-cell-editor__fab-green admin-cell-editor__fab-green--large"
-                          : "admin-cell-editor__fab-green"
+                          ? "admin-cell-editor__soportes-header admin-cell-editor__soportes-header--empty"
+                          : "admin-cell-editor__soportes-header"
                       }
-                      title={hasRepos ? "Agregar soporte" : "Añade primero un repositorio"}
-                      aria-label="Agregar soporte"
-                      disabled={!hasRepos || indexingAdd || saving || supportLoading}
-                      onClick={() => {
-                        if (!hasRepos) return;
-                        setShowSupportModal(true);
-                        if (reposCombined.length === 1) setSupRepoId(reposCombined[0].id);
-                      }}
                     >
-                      +
-                    </button>
-                  </div>
-                </div>
-                {supportLoading && <p className="muted small">Cargando soportes…</p>}
-                {!supportLoading && supportRows.length > 0 && supportFiltersOpen && (
-                  <div
-                    className="admin-cell-editor__soportes-filters"
-                    id="admin-soportes-filters-panel"
-                    role="region"
-                    aria-labelledby="admin-soportes-filter-trigger"
-                  >
-                    <label className="field admin-cell-editor__soportes-filter-field">
-                      <span>Filtrar por repositorio</span>
-                      <select
-                        value={supportFilterRepoId}
-                        onChange={(ev) => setSupportFilterRepoId(ev.target.value)}
-                        aria-label="Filtrar por repositorio"
-                      >
-                        <option value="">Todos los repositorios</option>
-                        {reposCombined.map((r) => (
-                          <option key={r.id} value={String(r.id)}>
-                            {r.displayName}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field admin-cell-editor__soportes-filter-field">
-                      <span>Código HU</span>
-                      <input
-                        type="search"
-                        value={supportFilterHu}
-                        onChange={(ev) => setSupportFilterHu(ev.target.value)}
-                        placeholder="p. ej. HU-002"
-                        autoComplete="off"
-                        aria-label="Filtrar por código HU"
-                      />
-                    </label>
-                    <label className="field admin-cell-editor__soportes-filter-field">
-                      <span>Nombre de archivo</span>
-                      <input
-                        type="search"
-                        value={supportFilterFile}
-                        onChange={(ev) => setSupportFilterFile(ev.target.value)}
-                        placeholder="p. ej. ENTREGABLE.md"
-                        autoComplete="off"
-                        aria-label="Filtrar por nombre de archivo"
-                      />
-                    </label>
-                    {(supportFilterRepoId !== "" ||
-                      supportFilterHu.trim() !== "" ||
-                      supportFilterFile.trim() !== "") && (
-                      <button
-                        type="button"
-                        className="btn admin-cell-editor__soportes-filter-clear"
-                        onClick={() => {
-                          setSupportFilterRepoId("");
-                          setSupportFilterHu("");
-                          setSupportFilterFile("");
-                        }}
-                      >
-                        Limpiar filtros
-                      </button>
-                    )}
-                  </div>
-                )}
-                {!supportLoading && supportRows.length > 0 && filteredSupportRows.length === 0 && (
-                  <p className="muted small admin-cell-editor__soportes-no-match">
-                    Ningún soporte coincide con los filtros.
-                  </p>
-                )}
-                {!supportLoading && supportRows.length > 0 && filteredSupportRows.length > 0 && (
-                  <ul className="admin-cell-editor__repo-list">
-                    {filteredSupportRows.map((row) => (
-                      <li key={`${row.repoId}-${row.obj.fileName}`} className="admin-cell-editor__repo-li">
-                        <span>
-                          <span className="muted small">{row.repoName} · </span>
-                          <strong>{row.obj.displayLabel ?? row.obj.fileName}</strong>
-                        </span>
-                        <span className="admin-cell-editor__row-actions">
+                      <h2 className="h3">Soportes {soporteTitle}</h2>
+                      <div className="admin-cell-editor__soportes-header-actions">
+                        {!supportEmpty && supportRows.length > 0 && (
                           <button
                             type="button"
-                            className="admin-icon-btn"
-                            title="Visualizar"
-                            aria-label="Visualizar soporte"
-                            onClick={() => void openSupportViewer(row.repoId, row.obj.fileName, row.obj.url)}
+                            className={
+                              "admin-cell-editor__soportes-filter-toggle" +
+                              (supportFiltersOpen ? " is-open" : "") +
+                              (supportFilterRepoId !== "" ||
+                              supportFilterHu.trim() !== "" ||
+                              supportFilterFile.trim() !== ""
+                                ? " has-active-filters"
+                                : "")
+                            }
+                            title={supportFiltersOpen ? "Ocultar filtros" : "Mostrar filtros"}
+                            aria-expanded={supportFiltersOpen}
+                            aria-controls="admin-soportes-filters-panel"
+                            id="admin-soportes-filter-trigger"
+                            onClick={() => setSupportFiltersOpen((o) => !o)}
                           >
-                            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
                               <path
                                 fill="currentColor"
-                                d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+                                d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"
                               />
                             </svg>
                           </button>
+                        )}
+                        <button
+                          type="button"
+                          className={
+                            supportEmpty
+                              ? "admin-cell-editor__fab-green admin-cell-editor__fab-green--large"
+                              : "admin-cell-editor__fab-green"
+                          }
+                          title={hasRepos ? "Agregar soporte" : "Añade primero un repositorio"}
+                          aria-label="Agregar soporte"
+                          disabled={!hasRepos || indexingAdd || saving || supportLoading}
+                          onClick={() => {
+                            if (!hasRepos) return;
+                            setShowSupportModal(true);
+                            if (reposCombined.length === 1) setSupRepoId(reposCombined[0].id);
+                          }}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    {supportLoading && <p className="muted small">Cargando soportes…</p>}
+                    {!supportLoading && supportRows.length > 0 && supportFiltersOpen && (
+                      <div
+                        className="admin-cell-editor__soportes-filters"
+                        id="admin-soportes-filters-panel"
+                        role="region"
+                        aria-labelledby="admin-soportes-filter-trigger"
+                      >
+                        <label className="field admin-cell-editor__soportes-filter-field">
+                          <span>Filtrar por repositorio</span>
+                          <select
+                            value={supportFilterRepoId}
+                            onChange={(ev) => setSupportFilterRepoId(ev.target.value)}
+                            aria-label="Filtrar por repositorio"
+                          >
+                            <option value="">Todos los repositorios</option>
+                            {reposCombined.map((r) => (
+                              <option key={r.id} value={String(r.id)}>
+                                {r.displayName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field admin-cell-editor__soportes-filter-field">
+                          <span>Código HU</span>
+                          <input
+                            type="search"
+                            value={supportFilterHu}
+                            onChange={(ev) => setSupportFilterHu(ev.target.value)}
+                            placeholder="p. ej. HU-002"
+                            autoComplete="off"
+                            aria-label="Filtrar por código HU"
+                          />
+                        </label>
+                        <label className="field admin-cell-editor__soportes-filter-field">
+                          <span>Nombre de archivo</span>
+                          <input
+                            type="search"
+                            value={supportFilterFile}
+                            onChange={(ev) => setSupportFilterFile(ev.target.value)}
+                            placeholder="p. ej. ENTREGABLE.md"
+                            autoComplete="off"
+                            aria-label="Filtrar por nombre de archivo"
+                          />
+                        </label>
+                        {(supportFilterRepoId !== "" ||
+                          supportFilterHu.trim() !== "" ||
+                          supportFilterFile.trim() !== "") && (
                           <button
                             type="button"
-                            className="admin-icon-btn admin-icon-btn--danger"
-                            title="Eliminar"
-                            aria-label="Eliminar soporte"
-                            onClick={() => void deleteSupportRow(row)}
+                            className="btn admin-cell-editor__soportes-filter-clear"
+                            onClick={() => {
+                              setSupportFilterRepoId("");
+                              setSupportFilterHu("");
+                              setSupportFilterFile("");
+                            }}
                           >
-                            ×
+                            Limpiar filtros
                           </button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                        )}
+                      </div>
+                    )}
+                    {!supportLoading && supportRows.length > 0 && filteredSupportRows.length === 0 && (
+                      <p className="muted small admin-cell-editor__soportes-no-match">
+                        Ningún soporte coincide con los filtros.
+                      </p>
+                    )}
+                    {!supportLoading && supportRows.length > 0 && filteredSupportRows.length > 0 && (
+                      <ul className="admin-cell-editor__repo-list">
+                        {filteredSupportRows.map((row) => (
+                          <li key={`${row.repoId}-${row.obj.fileName}`} className="admin-cell-editor__repo-li">
+                            <span>
+                              <span className="muted small">{row.repoName} · </span>
+                              <strong>{row.obj.displayLabel ?? row.obj.fileName}</strong>
+                            </span>
+                            <span className="admin-cell-editor__row-actions">
+                              <button
+                                type="button"
+                                className="admin-icon-btn"
+                                title="Visualizar"
+                                aria-label="Visualizar soporte"
+                                onClick={() => void openSupportViewer(row.repoId, row.obj.fileName, row.obj.url)}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                                  <path
+                                    fill="currentColor"
+                                    d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+                                  />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                className="admin-icon-btn admin-icon-btn--danger"
+                                title="Eliminar"
+                                aria-label="Eliminar soporte"
+                                onClick={() => void deleteSupportRow(row)}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                </>
+              )}
 
               <div className="admin-cell-editor__save-wrap admin-cell-editor__save-actions">
                 <button type="submit" className="btn primary admin-cell-editor__save-btn" disabled={saving || indexingAdd}>
@@ -1499,7 +1514,7 @@ export function AdminCellEditorPage() {
               </div>
             </div>
 
-            {hasRepos && (
+            {!isNew && hasRepos && (
               <aside className="card admin-cell-editor__aside">
                 <h2 className="h3">Explorador</h2>
                 <label className="field">
@@ -1508,7 +1523,7 @@ export function AdminCellEditorPage() {
                     value={explorerRepoId ?? ""}
                     onChange={(ev) => {
                       const v = ev.target.value;
-                      setExplorerRepoId(v === "" ? null : Number.parseInt(v, 10));
+                      setExplorerRepoId(v === "" ? null : v);
                       setExplorerFileSelected(null);
                     }}
                   >
@@ -1618,7 +1633,7 @@ export function AdminCellEditorPage() {
                 <select
                   required
                   value={supRepoId === "" ? "" : String(supRepoId)}
-                  onChange={(ev) => setSupRepoId(ev.target.value === "" ? "" : Number.parseInt(ev.target.value, 10))}
+                  onChange={(ev) => setSupRepoId(ev.target.value)}
                 >
                   <option value="">— Elegir —</option>
                   {reposCombined.map((r) => (
@@ -1773,6 +1788,125 @@ export function AdminCellEditorPage() {
                   {viewerSaving ? "Guardando…" : "Guardar y reindexar"}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingRepo && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => !editRepoSaving && setEditingRepo(null)}
+        >
+          <div
+            className="modal-card card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-repo-modal-title"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <h2 id="edit-repo-modal-title" className="h3">
+              Editar repositorio
+            </h2>
+            <label className="field">
+              <span>URL</span>
+              <input value={editingRepo.repositoryUrl} readOnly disabled />
+            </label>
+            <label className="field">
+              <span>Rama</span>
+              {editRepoBranchesLoading ? (
+                <input value="Cargando ramas…" readOnly disabled />
+              ) : (
+                <select
+                  value={editRepoSelectedBranch}
+                  onChange={(ev) => setEditRepoSelectedBranch(ev.target.value)}
+                >
+                  {editRepoBranches.length === 0 && (
+                    <option value={editRepoSelectedBranch || ""}>
+                      {editRepoSelectedBranch || "(sin ramas disponibles)"}
+                    </option>
+                  )}
+                  {editRepoBranches.map((b) => (
+                    <option key={b.nombre} value={b.nombre}>
+                      {b.nombre} ({b.commit.substring(0, 7)})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+            <label className="field">
+              <span>Nombre</span>
+              <input value={editingRepo.displayName} readOnly disabled />
+            </label>
+            <label className="field">
+              <span>Namespace vectorial</span>
+              <input
+                value={editRepoNamespace}
+                readOnly
+                disabled
+              />
+            </label>
+            <label className="field">
+              <span>Etiquetas</span>
+              <div
+                className="admin-repo-form__tag-rhombs"
+                role="group"
+                aria-label="Etiquetas del repositorio"
+              >
+                {(tagCatalog?.tags ?? []).map((tag) => {
+                  const isSelected = Array.from(editRepoTags).some((t) => t.toLowerCase() === tag.toLowerCase());
+                  return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={
+                      "admin-repo-form__tag-rhomb" +
+                      (isSelected ? " admin-repo-form__tag-rhomb--on" : "")
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditRepoTags((prev) => {
+                        const next = new Set(prev);
+                        if (isSelected) {
+                          // Remove (case-insensitive)
+                          for (const t of next) {
+                            if (t.toLowerCase() === tag.toLowerCase()) next.delete(t);
+                          }
+                        } else {
+                          next.add(tag);
+                        }
+                        return next;
+                      });
+                    }}
+                    title={tag}
+                  >
+                    <span className="admin-repo-form__tag-rhomb-inner">{tag}</span>
+                  </button>
+                  );
+                })}
+                {(tagCatalog?.tags ?? []).length === 0 && (
+                  <span className="muted small">No hay tags configurados.</span>
+                )}
+              </div>
+            </label>
+            <div className="admin-cell-editor__modal-actions">
+              <button
+                type="button"
+                className="btn"
+                disabled={editRepoSaving}
+                onClick={() => setEditingRepo(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={editRepoSaving || editRepoBranchesLoading}
+                onClick={() => void submitEditRepo()}
+              >
+                {editRepoSaving ? "Guardando…" : "Guardar"}
+              </button>
             </div>
           </div>
         </div>

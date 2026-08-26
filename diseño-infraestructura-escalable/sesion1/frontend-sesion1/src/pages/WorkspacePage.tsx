@@ -196,11 +196,11 @@ function mapUnifiedS3ArtifactsToProposals(items: WorkAreaS3ObjectDto[]): WorkAre
  * La columna «Archivos nuevos» solo debe listar entradas con objeto real en S3 (presign) o restauradas desde S3;
  * no propuestas solo en memoria devueltas por el último turno del chat (sin objeto en S3).
  */
-function isWorkareaS3Artifact(p: WorkAreaFileProposal): boolean {
-  return Boolean(
-    p.artifactViewOnly && p.s3Bucket && /workarea/i.test(p.s3Bucket) && p.s3ObjectKey?.trim(),
-  );
-}
+// function isWorkareaS3Artifact(p: WorkAreaFileProposal): boolean {
+//   return Boolean(
+//     p.artifactViewOnly && p.s3Bucket && /workarea/i.test(p.s3Bucket) && p.s3ObjectKey?.trim(),
+//   );
+// }
 
 /** Borrador versionado solo en bucket borradores (lista GET /s3-artifacts). */
 function isS3BorradorArtifact(p: WorkAreaFileProposal): boolean {
@@ -255,10 +255,10 @@ type LocationState = {
   /** Primer mensaje RAG al continuar una tarea de soporte */
   initialChatPrompt?: string;
   /** Listar .md de soporte del repo de celda (solo lectura para soporte) */
-  taskCellRepoId?: number;
+  taskCellRepoId?: string;
   /** Contexto de tarea (soporte): enunciado + vuelta a lista de célula/tareas */
   taskContext?: {
-    taskId?: number;
+    taskId?: string;
     /** Desde {@code docviz_task.chat_conversation_id} (PostgreSQL). */
     chatConversationId?: string | null;
     huCode: string;
@@ -356,6 +356,17 @@ export function WorkspacePage() {
   const initialChatPromptFromTask = state?.initialChatPrompt;
   const taskContextFromRoute = state?.taskContext;
 
+  const stateConnectExists = !!state?.connect;
+  const stateConnectRepoRoot = state?.connect?.repositoryRoot;
+  const stateConnectHasFiles = !!(
+    state?.connect?.directory &&
+    (state.connect.directory.archivos.length > 0 || state.connect.directory.folders.length > 0)
+  );
+
+  const taskContextKey = taskContextFromRoute
+    ? `${taskContextFromRoute.taskId || ""}:${taskContextFromRoute.huCode}`
+    : "";
+
   /** Si entras a /app sin state (p. ej. nuevo login), recupera HU/tarea para historial Firestore y cabeceras S3. */
   const [taskContextFromStorage, setTaskContextFromStorage] = useState<StoredTaskContext | null>(null);
 
@@ -374,7 +385,7 @@ export function WorkspacePage() {
       return;
     }
     setTaskContextFromStorage(loadWorkspaceTaskContext(u));
-  }, [taskContextFromRoute, connect?.usuario]);
+  }, [taskContextKey, connect?.usuario]);
 
   const taskContext = taskContextFromRoute ?? taskContextFromStorage ?? undefined;
 
@@ -995,6 +1006,13 @@ export function WorkspacePage() {
     chatLoadingRef.current = chatLoading;
   }, [chatLoading]);
 
+  /** Auto-scroll al fondo del chat cuando llegan nuevos mensajes o tokens. */
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [chatTurns]);
+
   /**
    * Concurrencia GET `/vector/chat/history`: `historyMutationGenRef` sube tras fusionar un turno RAG;
    * los GET iniciados antes invalidan (no aplican) para no pisar la UI con [] u obsoleto.
@@ -1002,6 +1020,7 @@ export function WorkspacePage() {
   const historyMutationGenRef = useRef(0);
 
   const chatFormRef = useRef<HTMLFormElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   const onQuestionKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1121,6 +1140,33 @@ export function WorkspacePage() {
   );
 
   /** Panel lateral (sesión + índice); persistido para la próxima visita */
+  /** Altura del panel de contexto maestro (resizable divider) */
+  const [sidebarTreeHeight, setSidebarTreeHeight] = useState<number | null>(null);
+  const sidebarSplitRef = useRef<HTMLDivElement>(null);
+  const onSidebarDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const treeSection = (e.target as HTMLElement).previousElementSibling as HTMLElement | null;
+    if (!treeSection) return;
+    const startHeight = treeSection.getBoundingClientRect().height;
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientY - startY;
+      const newHeight = Math.max(60, startHeight + delta);
+      setSidebarTreeHeight(newHeight);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
   const [sessionPanelOpen, setSessionPanelOpen] = useState(() => {
     try {
       return localStorage.getItem("docviz_session_panel_open") !== "0";
@@ -1314,7 +1360,7 @@ export function WorkspacePage() {
 
   useEffect(() => {
 
-    if (state?.connect) return;
+    if (stateConnectExists) return;
 
     const saved = loadGitConnectRequest();
 
@@ -1356,7 +1402,26 @@ export function WorkspacePage() {
 
     };
 
-  }, [navigate, state?.connect]);
+  }, [navigate, stateConnectExists]);
+
+  /** Hidratar el árbol de archivos del repositorio si el state.connect tiene directorio vacío (navegación desde tareas). */
+  useEffect(() => {
+    if (!stateConnectExists) return;
+    if (stateConnectHasFiles) return;
+    const repoUrl = stateConnectRepoRoot || taskCellRepoId || loadGitConnectRequest()?.repositoryUrl || "";
+    if (!repoUrl) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await connectGit({ mode: "HTTPS_PUBLIC", repositoryUrl: repoUrl });
+        if (cancelled) return;
+        setConnect(res);
+      } catch {
+        // silently keep the empty directory
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [stateConnectExists, stateConnectHasFiles, stateConnectRepoRoot, taskCellRepoId]);
 
 
 
@@ -1513,6 +1578,11 @@ export function WorkspacePage() {
    */
   useEffect(() => {
     if (!getUserId()?.trim()) return;
+    // Si estamos en primer inicio con auto-send, no hidratar historial (no hay nada aún)
+    if (initialChatPromptFromTask) {
+      setChatHistoryHydrated(true);
+      return;
+    }
     let cancelled = false;
     setChatHistoryHydrated(false);
     (async () => {
@@ -1612,19 +1682,59 @@ export function WorkspacePage() {
   ]);
 
   /** Primer mensaje automático solo al crear una tarea nueva (`initialChatPrompt` en el state de la ruta). */
+  const autoSendFiredRef = useRef(false);
   useEffect(() => {
-    if (!ingestComplete || !initialChatPromptFromTask) return;
-    const dedupe =
-      taskContext?.taskId != null
-        ? `docviz:autoTaskChat:${connect?.usuario ?? "u"}:task-${taskContext.taskId}`
-        : `docviz:autoTaskChat:${connect?.usuario ?? "u"}:p-${initialChatPromptFromTask.slice(0, 96)}`;
+    if (autoSendFiredRef.current) return;
+    if (!initialChatPromptFromTask) return;
+    // No depender de ingestComplete — disparar inmediatamente
+    autoSendFiredRef.current = true;
+    // Invalidar historial para que no pise nuestro turn
+    historyMutationGenRef.current += 1;
+
+    const prompt = initialChatPromptFromTask;
+    const streamId = `stream-auto-${Date.now()}`;
+
+    // Poner la burbuja del usuario inmediatamente
+    setChatTurns([{
+      id: streamId,
+      question: prompt,
+      answer: "",
+      sources: [],
+      repoLabel: "",
+      createdAt: new Date().toISOString(),
+    }]);
+    setChatLoading(true);
+    setChatErr(null);
+
     let cancelled = false;
-    void runAutoInitialChatStream(initialChatPromptFromTask, dedupe, () => cancelled);
-    return () => {
-      cancelled = true;
-      setChatLoading(false);
-    };
-  }, [ingestComplete, initialChatPromptFromTask, connect?.usuario, taskContext?.taskId, runAutoInitialChatStream]);
+    (async () => {
+      try {
+        await streamVectorChat(
+          prompt,
+          {
+            onStart: () => {},
+            onDelta: (text) => {
+              if (cancelled) return;
+              setChatTurns((prev) =>
+                prev.map((t) => (t.id === streamId ? { ...t, answer: t.answer + text } : t)),
+              );
+            },
+          },
+          {
+            taskId: taskContext?.taskId ?? undefined,
+          },
+        );
+      } catch (e) {
+        if (!cancelled) {
+          setChatErr(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (!cancelled) setChatLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialChatPromptFromTask]);
 
   /**
    * «Continuar en workspace» sin prompt en la ruta: si tras cargar Firestore no hay turnos,
@@ -1692,7 +1802,8 @@ export function WorkspacePage() {
 
     try {
 
-      const r = await fetchFileContent(rel);
+      const repoUrl = (state?.taskCellRepoId as string) || loadGitConnectRequest()?.repositoryUrl || "";
+      const r = await fetchFileContent(rel, repoUrl || undefined);
 
       lruMapPut(filePreviewLru.current, rel, r.content, FILE_PREVIEW_LRU_MAX);
 
@@ -2589,13 +2700,19 @@ export function WorkspacePage() {
         <aside className="panel workspace__panel workspace__panel--sidebar">
 
           <div className="workspace__sidebar-split">
-            <div className="workspace__sidebar-section workspace__sidebar-section--tree">
+            <div className="workspace__sidebar-section workspace__sidebar-section--tree" style={sidebarTreeHeight != null ? { flex: "none", height: sidebarTreeHeight } : undefined}>
               <h2>CONTEXTO MAESTRO</h2>
 
               <div className="workspace__sidebar-tree-scroll">
                 <FolderTree root={dir} onSelectFile={onSelectFile} selectedPath={selectedPath} />
               </div>
             </div>
+
+            <div
+              className="workspace__sidebar-divider"
+              title="Arrastra para redimensionar"
+              onMouseDown={onSidebarDividerMouseDown}
+            />
 
             <div className="workspace__sidebar-section workspace__sidebar-section--work">
               <WorkAreaPanel
@@ -2607,7 +2724,7 @@ export function WorkspacePage() {
                 error={workAreaErr}
                 busy={workAreaKeepLoadingId !== null}
                 downloadRequestInit={workAreaTaskHeaders}
-                persistenceHint={workAreaPersistenceHint}
+                persistenceHint={null}
                 onDeleteS3Artifact={(p) => void handleWorkAreaDeleteS3Artifact(p)}
               />
             </div>
@@ -3089,7 +3206,7 @@ export function WorkspacePage() {
 
           )}
 
-          <div className="workspace__chat-scroll">
+          <div className="workspace__chat-scroll" ref={chatScrollRef}>
 
           {chatHistoryErr && (
 

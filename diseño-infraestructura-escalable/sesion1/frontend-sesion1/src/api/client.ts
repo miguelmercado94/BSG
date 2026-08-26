@@ -24,7 +24,6 @@ import type {
   TaskCreateRequest,
   TaskResponse,
   WorkAreaS3ObjectDto,
-  RagChatTurnResponse,
   VectorChatResponse,
   VectorClearResponse,
   VectorIngestResponse,
@@ -63,8 +62,9 @@ export function clearUserId(): void {
 /**
  * Si CELL_REPO_READY llega con archivos/chunks en 0 pero hubo un DONE previo en el mismo stream,
  * conservar los conteos del DONE (p. ej. lectura BD desfasada o proxy que agrupa líneas NDJSON).
+ * Kept for future stream-based ingest migration.
  */
-function mergeReadyAndDoneIngestCounts(
+export function mergeReadyAndDoneIngestCounts(
   lastReady: IngestProgressEvent,
   lastDone: IngestProgressEvent | null,
 ): { files: number | null; chunks: number | null; skipped: string[] | undefined | null } {
@@ -306,9 +306,9 @@ function humanizeFailedFetchMessage(
     /504\s+Gateway\s+Time-out/i.test(raw)
   ) {
     if (kind === "security") {
-      return `El servicio de seguridad no está disponible (${res.status} desde el proxy). Suele indicar que el micro back-security en ECS no respondió; revisa bsg-back-security-service y los logs /ecs/bsg-back-security en CloudWatch.`;
+      return `El servicio de seguridad no está disponible (${res.status} desde el proxy). Suele indicar que el micro back-security no respondió; revisa el servicio y los logs.`;
     }
-    return `El API DocViz no está disponible (${res.status} desde el proxy). Suele indicar que el backend ECS no respondió en ese momento; revisa el servicio bsg-backend-service y los logs /ecs/bsg-backend en CloudWatch.`;
+    return `El API no está disponible (${res.status} desde el proxy). Suele indicar que soporte-rag-mt no respondió; revisa el servicio y los logs.`;
   }
   return raw || res.statusText;
 }
@@ -318,8 +318,8 @@ async function parseJson<T>(res: Response, proxyKind: ProxyFailureKind = "docviz
   if (!res.ok) {
     let msg = humanizeFailedFetchMessage(res, text || res.statusText, proxyKind);
     try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
+      const j = JSON.parse(text) as { error?: string; message?: string; detail?: string; title?: string };
+      msg = j.detail ?? j.message ?? j.error ?? j.title ?? msg;
     } catch {
       /* ignore */
     }
@@ -342,109 +342,184 @@ function headers(extra?: HeadersInit): HeadersInit {
   if (!uid) {
     throw new Error("Falta el identificador de usuario (DocViz).");
   }
-  return {
+  const result: Record<string, string> = {
     "Content-Type": "application/json",
     [USER_HEADER]: uid,
     [DOCVIZ_ROLE_HEADER]: getDocVizRole(),
-    ...extra,
   };
+  // Bearer token para el API Gateway
+  const token = getAccessToken();
+  if (token) {
+    result["Authorization"] = `Bearer ${token}`;
+  }
+  return { ...result, ...extra };
 }
 
 /** Cabeceras sin Content-Type (p. ej. FormData con boundary). */
-function headersMultipart(): HeadersInit {
+export function headersMultipart(): HeadersInit {
   const uid = getUserId();
   if (!uid) {
     throw new Error("Falta el identificador de usuario (DocViz).");
   }
-  return { [USER_HEADER]: uid, [DOCVIZ_ROLE_HEADER]: getDocVizRole() };
+  const result: Record<string, string> = {
+    [USER_HEADER]: uid,
+    [DOCVIZ_ROLE_HEADER]: getDocVizRole(),
+  };
+  const token = getAccessToken();
+  if (token) {
+    result["Authorization"] = `Bearer ${token}`;
+  }
+  return result;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Git connection
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildFolderTree(paths: string[], rootName?: string): FolderStructureDto {
+  const root: FolderStructureDto = { folder: rootName || "", archivos: [], folders: [] };
+
+  for (const path of paths) {
+    const parts = path.split("/");
+    let current = root;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isFile = i === parts.length - 1;
+
+      if (isFile) {
+        if (!current.archivos.includes(part)) {
+          current.archivos.push(part);
+        }
+      } else {
+        let nextDir = current.folders.find((f) => f.folder === part);
+        if (!nextDir) {
+          nextDir = { folder: part, archivos: [], folders: [] };
+          current.folders.push(nextDir);
+        }
+        current = nextDir;
+      }
+    }
+  }
+
+  return root;
 }
 
 export async function connectGit(body: GitConnectRequest): Promise<ConnectResponse> {
-  const res = await fetch(`${apiBase()}/connect/git`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify(body),
-  });
-  return parseJson<ConnectResponse>(res);
+  const url = body.repositoryUrl || "";
+  const repoName = parseGitRepoNameFromHttpsUrl(url) || url.split("/").filter(Boolean).pop() || "repo";
+  try {
+    const res = await fetch(`${apiBase()}/api/v1/repositorios?url=${encodeURIComponent(url)}`, { headers: headers() });
+    if (res.ok) {
+      const r = await parseJson<any>(res);
+      const files = (r.filesPath && r.filesPath.length > 0) ? r.filesPath : (r.archivosS3Workarea || []);
+      return {
+        usuario: getUserId(),
+        connected: true,
+        repositoryRoot: url,
+        directory: buildFolderTree(files, r.nombre || repoName),
+      };
+    }
+  } catch (e) {
+    // ignore
+  }
+  return {
+    usuario: getUserId(),
+    connected: true,
+    repositoryRoot: url,
+    directory: { folder: repoName, archivos: [], folders: [] },
+  };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cells (Células) — mapped to soporte-rag-mt /api/v1/celulas
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function fetchCells(): Promise<CellResponse[]> {
-  const res = await fetch(`${apiBase()}/cells`, { headers: headers() });
-  return parseJson<CellResponse[]>(res);
+  const res = await fetch(`${apiBase()}/api/v1/celulas`, { headers: headers() });
+  const raw = await parseJson<any[]>(res);
+  return raw.map((c) => ({
+    id: c.codigo,
+    name: c.nombre,
+    description: c.descripcion ?? "",
+    createdAt: c.createdAt ?? null,
+    createdBy: c.createdBy ?? null,
+  })) as any;
 }
 
-export async function fetchCellRepos(cellId: number): Promise<CellRepoResponse[]> {
-  const res = await fetch(`${apiBase()}/cells/${cellId}/repos`, { headers: headers() });
-  return parseJson<CellRepoResponse[]>(res);
-}
-
-export async function createTask(body: TaskCreateRequest): Promise<TaskResponse> {
-  const res = await fetch(`${apiBase()}/tasks`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify(body),
-  });
-  return parseJson<TaskResponse>(res);
-}
-
-/** Lista tareas; con cellId filtra por célula (admin: todas en la celda; soporte: las del usuario). */
-export async function fetchTasks(cellId?: number): Promise<TaskResponse[]> {
-  const q = cellId != null ? `?cellId=${encodeURIComponent(String(cellId))}` : "";
-  const res = await fetch(`${apiBase()}/tasks${q}`, { headers: headers() });
-  return parseJson<TaskResponse[]>(res);
-}
-
-export async function getTask(id: number): Promise<TaskResponse> {
-  const res = await fetch(`${apiBase()}/tasks/${id}`, { headers: headers() });
-  return parseJson<TaskResponse>(res);
-}
-
-export async function continueTask(taskId: number): Promise<TaskContinueResponse> {
-  const res = await fetch(`${apiBase()}/tasks/continue`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ taskId }),
-  });
-  return parseJson<TaskContinueResponse>(res);
-}
-
-export async function listSupportMarkdownObjects(cellRepoId: number): Promise<SupportMarkdownObjectDto[]> {
-  const q = encodeURIComponent(String(cellRepoId));
-  const res = await fetch(`${apiBase()}/support/markdown/objects?cellRepoId=${q}`, { headers: headers() });
-  if (res.status === 404) return [];
-  return parseJson<SupportMarkdownObjectDto[]>(res);
-}
-
-/** Descarga texto desde URL presignada S3 (GET /support/markdown/object eliminado). */
-export async function fetchTextFromPresignedUrl(url: string, init?: { signal?: AbortSignal }): Promise<string> {
-  const res = await fetch(url, { method: "GET", signal: init?.signal });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
-  }
-  return res.text();
+export async function fetchCellRepos(cellId: string): Promise<CellRepoResponse[]> {
+  const res = await fetch(`${apiBase()}/api/v1/celulas/${encodeURIComponent(cellId)}`, { headers: headers() });
+  const cell = await parseJson<any>(res);
+  if (!cell || !cell.repositorios) return [];
+  return cell.repositorios.map((r: any) => ({
+    id: r.url,
+    cellId: cellId,
+    displayName: r.nombre,
+    repositoryUrl: r.url,
+    connectionMode: r.url?.startsWith("local:") ? "LOCAL" : "HTTPS_PUBLIC",
+    gitUsername: null,
+    hasCredential: false,
+    localPath: r.url?.startsWith("local:") ? r.url.substring(6) : null,
+    tagsCsv: r.tags ? r.tags.join(", ") : null,
+    vectorNamespace: r.vectorNamespace || (r.url ? newVectorNamespaceFromRepoName(r.nombre) : null),
+    active: true,
+    createdAt: null,
+    updatedAt: null,
+    lastIngestAt: null,
+    lastIngestFiles: r.archivosS3Workarea ? r.archivosS3Workarea.length : 0,
+    lastIngestChunks: 0,
+    lastIngestSkipped: null,
+    linkedWithoutReindex: !!r.indexado,
+    indexado: !!r.indexado,
+    ramaPrincipal: r.ramaPrincipal || undefined,
+    filesPath: r.filesPath || [],
+    folderPath: r.folderPath || [],
+  }));
 }
 
 export async function adminCreateCell(body: CellRequestBody): Promise<CellResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells`, {
+  const res = await fetch(`${apiBase()}/api/v1/celulas`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      codigo: body.code ?? body.name,
+      nombre: body.name,
+      descripcion: body.description ?? "",
+    }),
   });
-  return parseJson<CellResponse>(res);
+  const c = await parseJson<any>(res);
+  return {
+    id: c.codigo,
+    name: c.nombre,
+    description: c.descripcion ?? "",
+    createdAt: c.createdAt ?? null,
+    createdBy: c.createdBy ?? null,
+  } as any;
 }
 
-export async function adminUpdateCell(id: number, body: CellRequestBody): Promise<CellResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/${id}`, {
+export async function adminUpdateCell(id: string, body: CellRequestBody): Promise<CellResponse> {
+  const res = await fetch(`${apiBase()}/api/v1/celulas/${id}`, {
     method: "PUT",
     headers: headers(),
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      codigo: id,
+      nombre: body.name,
+      descripcion: body.description ?? "",
+    }),
   });
-  return parseJson<CellResponse>(res);
+  const c = await parseJson<any>(res);
+  return {
+    id: c.codigo,
+    name: c.nombre,
+    description: c.descripcion ?? "",
+    createdAt: c.createdAt ?? null,
+    createdBy: c.createdBy ?? null,
+  } as any;
 }
 
-export async function adminDeleteCell(id: number): Promise<void> {
-  const res = await fetch(`${apiBase()}/admin/cells/${id}`, {
+export async function adminDeleteCell(id: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/v1/celulas/${id}`, {
     method: "DELETE",
     headers: headers(),
   });
@@ -461,64 +536,118 @@ export async function adminDeleteCell(id: number): Promise<void> {
   }
 }
 
-export async function adminFetchCellDeleteImpact(cellId: number): Promise<DeleteImpactResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/delete-impact`, { headers: headers() });
-  return parseJson<DeleteImpactResponse>(res);
+export async function adminFetchCellDeleteImpact(cellId: string): Promise<DeleteImpactResponse> {
+  // TODO: Migrate — soporte-rag-mt no tiene endpoint de delete-impact dedicado.
+  void cellId;
+  return { taskCount: 0 } as DeleteImpactResponse;
 }
 
-export async function adminFetchRepoDeleteImpact(cellId: number, repoId: number): Promise<DeleteImpactResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}/delete-impact`, {
-    headers: headers(),
-  });
-  return parseJson<DeleteImpactResponse>(res);
+export async function adminFetchRepoDeleteImpact(cellId: string, repoId: string): Promise<DeleteImpactResponse> {
+  // TODO: Migrate — soporte-rag-mt no tiene endpoint de delete-impact dedicado.
+  void cellId;
+  void repoId;
+  return { taskCount: 0 } as DeleteImpactResponse;
 }
 
-/** Nombre y namespace sugeridos; si el URL ya existe en BD, reutiliza los guardados. */
+/** Detecta la rama principal y genera hints (nombre, namespace) desde la URL del repo. */
 export async function adminRepoUrlHint(params: {
   url?: string;
   localPath?: string;
   mode: GitConnectionMode;
 }): Promise<CellRepoUrlHint> {
-  const q = new URLSearchParams();
-  q.set("mode", params.mode);
-  if (params.url != null && params.url.trim() !== "") q.set("url", params.url.trim());
-  if (params.localPath != null && params.localPath.trim() !== "") q.set("localPath", params.localPath.trim());
-  const res = await fetch(`${apiBase()}/admin/cells/hints/repo-url?${q.toString()}`, { headers: headers() });
-  return parseJson<CellRepoUrlHint>(res);
+  const url = params.url?.trim() ?? "";
+  if (!url || params.mode === "LOCAL") {
+    // Modo local o sin URL: generar hints en el frontend
+    const name = params.localPath?.split(/[/\\]/).pop() ?? "repo";
+    return {
+      displayName: name,
+      vectorNamespace: newVectorNamespaceFromRepoName(name),
+      reusedFromExisting: false,
+      defaultBranch: null,
+    };
+  }
+  // Detectar rama principal desde el backend
+  const repoName = parseGitRepoNameFromHttpsUrl(url) ?? "repo";
+  let defaultBranch: string | null = null;
+  try {
+    const res = await fetch(
+      `${apiBase()}/api/v1/repositorios/rama-principal?url=${encodeURIComponent(url)}`,
+      { headers: headers() },
+    );
+    if (res.ok) {
+      const data = await res.json() as { ramaPrincipal?: string };
+      defaultBranch = data.ramaPrincipal ?? null;
+    }
+  } catch {
+    // Network error or unavailable — leave branch as null
+  }
+  return {
+    displayName: repoName,
+    vectorNamespace: newVectorNamespaceFromRepoName(repoName),
+    reusedFromExisting: false,
+    defaultBranch,
+  };
 }
 
-export async function adminCreateRepo(cellId: number, body: CellRepoRequestBody): Promise<CellRepoResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos`, {
+// ─────────────────────────────────────────────────────────────────────────────
+// Repos (Repositorios) — mapped to soporte-rag-mt /api/v1/repositorios
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function adminCreateRepo(cellId: string, body: CellRepoRequestBody): Promise<CellRepoResponse> {
+  // soporte-rag-mt: POST /api/v1/repositorios
+  const tags = body.tagsCsv ? body.tagsCsv.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  const res = await fetch(`${apiBase()}/api/v1/repositorios`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      nombre: body.displayName || parseGitRepoNameFromHttpsUrl(body.repositoryUrl) || "repo",
+      url: body.repositoryUrl,
+      ramaPrincipal: (body as CellRepoRequestBody & { defaultBranch?: string }).defaultBranch || "",
+      descripcion: "",
+      codigoCelula: cellId,
+      tags,
+    }),
   });
-  return parseJson<CellRepoResponse>(res);
+  const r = await parseJson<any>(res);
+  return {
+    id: r.url,
+    cellId: cellId,
+    displayName: r.nombre,
+    repositoryUrl: r.url,
+    connectionMode: r.url?.startsWith("local:") ? "LOCAL" : "HTTPS_PUBLIC",
+    gitUsername: null,
+    hasCredential: false,
+    localPath: r.url?.startsWith("local:") ? r.url.substring(6) : null,
+    tagsCsv: r.tags ? r.tags.join(", ") : null,
+    vectorNamespace: r.vectorNamespace || (r.url ? newVectorNamespaceFromRepoName(r.nombre) : null),
+    active: true,
+    createdAt: null,
+    updatedAt: null,
+    lastIngestAt: null,
+    lastIngestFiles: r.archivosS3Workarea ? r.archivosS3Workarea.length : 0,
+    lastIngestChunks: 0,
+    lastIngestSkipped: null,
+    linkedWithoutReindex: !!r.indexado,
+    indexado: !!r.indexado,
+    filesPath: r.filesPath || [],
+    folderPath: r.folderPath || [],
+  };
 }
 
 /**
  * Crea repo en la célula con NDJSON de progreso (archivos, chunks) y evento final CELL_REPO_READY.
- * Si el backend no expone /repos/stream (404), delega en {@link adminCreateRepo}.
+ * TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+ * soporte-rag-mt usa POST /api/v1/repositorios/indexar para indexar.
  */
 export async function adminCreateRepoStream(
-  cellId: number,
+  cellId: string,
   body: CellRepoRequestBody,
   onProgress: (ev: IngestProgressEvent) => void,
   init?: { signal?: AbortSignal },
 ): Promise<CellRepoResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/stream`, {
-    method: "POST",
-    headers: {
-      ...headers(),
-      Accept: "application/x-ndjson, application/json;q=0.9, */*;q=0.1",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  if (res.status === 404) {
-    onProgress({ phase: "START", totalFiles: 0, filesProcessed: 0, chunksIndexed: 0 });
-    const r = await adminCreateRepo(cellId, body);
+  onProgress({ phase: "START", totalFiles: 0, filesProcessed: 0, chunksIndexed: 0 });
+  const r = await adminCreateRepo(cellId, body);
+  if (r.linkedWithoutReindex) {
     onProgress({
       phase: "CELL_REPO_READY",
       cellRepoId: r.id,
@@ -526,240 +655,214 @@ export async function adminCreateRepoStream(
       filesProcessed: r.lastIngestFiles ?? 0,
       chunksIndexed: r.lastIngestChunks ?? 0,
       namespace: r.vectorNamespace ?? "",
-      linkedWithoutReindex: r.linkedWithoutReindex,
+      linkedWithoutReindex: true,
     });
     return r;
   }
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text || res.statusText;
-    try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg);
-  }
-  const reader = res.body?.getReader();
-  if (!reader) {
-    throw new Error("Respuesta sin cuerpo legible");
-  }
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let readyId: number | null = null;
 
-  function consumeLine(trimmed: string): void {
-    if (!trimmed) return;
-    const ev = JSON.parse(trimmed) as IngestProgressEvent;
-    onProgress(ev);
-    if (ev.phase === "ERROR") {
-      throw new Error(ev.error ?? "Error al crear el repositorio");
+  try {
+    const response = await fetch(`${apiBase()}/api/v1/repositorios/indexar?url=${encodeURIComponent(r.id)}`, {
+      method: "POST",
+      headers: headers(),
+      signal: init?.signal,
+    });
+    
+    if (response.ok && response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let filesProcessed = 0;
+      let totalFiles = r.filesPath?.length ?? r.lastIngestFiles ?? 0;
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const update = JSON.parse(line);
+            filesProcessed++;
+            onProgress({
+              phase: "PROGRESS",
+              totalFiles,
+              filesProcessed,
+              chunksIndexed: filesProcessed,
+              currentFile: update.filePath,
+              detail: update.mensaje || "Indexando...",
+            });
+          } catch (e) {
+            console.error("Failed to parse progress line", e);
+          }
+        }
+      }
     }
-    if (ev.phase === "CELL_REPO_READY" && ev.cellRepoId != null) {
-      readyId = ev.cellRepoId;
-    }
-  }
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      buffer += decoder.decode();
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      consumeLine(line.trim());
-    }
-  }
-  const tail = buffer.trim();
-  if (tail) {
-    consumeLine(tail);
+  } catch (err) {
+    console.error("Streaming indexation failed", err);
   }
 
-  const repos = await fetchCellRepos(cellId);
-  const found =
-    readyId != null ? repos.find((r) => r.id === readyId) : repos.length > 0 ? repos[repos.length - 1] : undefined;
-  if (!found) {
-    throw new Error("No se pudo confirmar el repositorio creado.");
+  // Fetch updated repository details from the backend to get the actual filesPath, folderPath, etc.
+  let finalRepo = r;
+  try {
+    const res = await fetch(`${apiBase()}/api/v1/repositorios?url=${encodeURIComponent(r.id)}`, { headers: headers() });
+    if (res.ok) {
+      const updated = await parseJson<any>(res);
+      finalRepo = {
+        id: updated.url,
+        cellId: cellId,
+        displayName: updated.nombre,
+        repositoryUrl: updated.url,
+        connectionMode: updated.url?.startsWith("local:") ? "LOCAL" : "HTTPS_PUBLIC",
+        gitUsername: null,
+        hasCredential: false,
+        localPath: updated.url?.startsWith("local:") ? updated.url.substring(6) : null,
+        tagsCsv: updated.tags ? updated.tags.join(", ") : null,
+        vectorNamespace: updated.vectorNamespace || (updated.url ? newVectorNamespaceFromRepoName(updated.nombre) : null),
+        active: true,
+        createdAt: null,
+        updatedAt: null,
+        lastIngestAt: null,
+        lastIngestFiles: updated.archivosS3Workarea ? updated.archivosS3Workarea.length : 0,
+        lastIngestChunks: 0,
+        lastIngestSkipped: null,
+        linkedWithoutReindex: !!updated.indexado,
+        indexado: !!updated.indexado,
+        filesPath: updated.filesPath || [],
+        folderPath: updated.folderPath || [],
+      };
+    }
+  } catch (err) {
+    console.error("Failed to fetch updated repository details", err);
   }
-  return found;
+
+  onProgress({
+    phase: "CELL_REPO_READY",
+    cellRepoId: finalRepo.id,
+    displayName: finalRepo.displayName,
+    filesProcessed: finalRepo.filesPath?.length ?? finalRepo.lastIngestFiles ?? 0,
+    chunksIndexed: finalRepo.lastIngestChunks ?? 0,
+    namespace: finalRepo.vectorNamespace ?? "",
+    linkedWithoutReindex: finalRepo.linkedWithoutReindex ?? false,
+  });
+  return finalRepo;
 }
 
 /**
- * Indexa un repositorio sin célula (NDJSON). Tras “Guardar” se asigna con {@link adminAssignReposToCell}.
+ * Indexa un repositorio sin célula (NDJSON).
+ * TODO: Migrate to frontend-side implementation (Git/S3 libraries).
  */
 export async function adminIndexRepoStream(
   body: CellRepoRequestBody,
   onProgress: (ev: IngestProgressEvent) => void,
   init?: { signal?: AbortSignal },
 ): Promise<CellRepoResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/index/stream`, {
+  onProgress({ phase: "START", totalFiles: 0, filesProcessed: 0, chunksIndexed: 0 });
+  const res = await fetch(`${apiBase()}/api/v1/repositorios`, {
     method: "POST",
-    headers: {
-      ...headers(),
-      Accept: "application/x-ndjson, application/json;q=0.9, */*;q=0.1",
-      "Content-Type": "application/json",
-    },
+    headers: headers(),
     body: JSON.stringify(body),
     signal: init?.signal,
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text || res.statusText;
-    try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg);
-  }
-  const reader = res.body?.getReader();
-  if (!reader) {
-    throw new Error("Respuesta sin cuerpo legible");
-  }
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let lastReady: IngestProgressEvent | null = null;
-  let lastDone: IngestProgressEvent | null = null;
-
-  function consumeLine(trimmed: string): void {
-    if (!trimmed) return;
-    const ev = JSON.parse(trimmed) as IngestProgressEvent;
-    onProgress(ev);
-    if (ev.phase === "ERROR") {
-      throw new Error(ev.error ?? "Error al indexar el repositorio");
-    }
-    if (ev.phase === "DONE") {
-      lastDone = ev;
-    }
-    if (ev.phase === "CELL_REPO_READY") {
-      lastReady = ev;
-    }
-  }
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      buffer += decoder.decode();
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      consumeLine(line.trim());
-    }
-  }
-  const tail = buffer.trim();
-  if (tail) {
-    consumeLine(tail);
-  }
-
-  const readyEvt = lastReady as IngestProgressEvent | null;
-  if (readyEvt == null || readyEvt.cellRepoId == null) {
-    throw new Error("No se recibió confirmación del repositorio indexado.");
-  }
-  const merged = mergeReadyAndDoneIngestCounts(readyEvt, lastDone);
-  return {
-    id: readyEvt.cellRepoId,
+  const repo = await parseJson<any>(res);
+  const mapped: CellRepoResponse = {
+    id: repo.url,
     cellId: null,
-    displayName: readyEvt.displayName ?? "",
-    repositoryUrl: body.repositoryUrl,
-    connectionMode: body.connectionMode,
-    gitUsername: body.gitUsername ?? null,
-    hasCredential: !!(body.credentialPlain && body.credentialPlain.length > 0),
-    localPath: body.localPath ?? null,
-    tagsCsv: body.tagsCsv ?? null,
-    vectorNamespace: readyEvt.namespace ?? null,
+    displayName: repo.nombre,
+    repositoryUrl: repo.url,
+    connectionMode: repo.url?.startsWith("local:") ? "LOCAL" : "HTTPS_PUBLIC",
+    gitUsername: null,
+    hasCredential: false,
+    localPath: repo.url?.startsWith("local:") ? repo.url.substring(6) : null,
+    tagsCsv: repo.tags ? repo.tags.join(", ") : null,
+    vectorNamespace: repo.url ? newVectorNamespaceFromRepoName(repo.nombre) : null,
     active: true,
     createdAt: null,
     updatedAt: null,
     lastIngestAt: null,
-    lastIngestFiles: merged.files,
-    lastIngestChunks: merged.chunks,
-    lastIngestSkipped: merged.skipped ?? null,
-    linkedWithoutReindex: readyEvt.linkedWithoutReindex,
+    lastIngestFiles: repo.archivosS3Workarea ? repo.archivosS3Workarea.length : 0,
+    lastIngestChunks: 0,
+    lastIngestSkipped: null,
+    linkedWithoutReindex: true,
   };
+  onProgress({
+    phase: "CELL_REPO_READY",
+    cellRepoId: mapped.id,
+    displayName: mapped.displayName ?? "",
+    filesProcessed: mapped.lastIngestFiles ?? 0,
+    chunksIndexed: mapped.lastIngestChunks ?? 0,
+    namespace: mapped.vectorNamespace ?? "",
+    linkedWithoutReindex: mapped.linkedWithoutReindex,
+  });
+  return mapped;
 }
 
 export async function adminBeginPendingIndex(body: CellRepoRequestBody): Promise<PendingIndexBeginResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/index/begin`, {
-    method: "POST",
-    headers: {
-      ...headers(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  return parseJson<PendingIndexBeginResponse>(res);
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  // soporte-rag-mt no tiene pending index flow.
+  void body;
+  throw new Error("Not implemented: adminBeginPendingIndex — pending migration.");
 }
 
-export async function adminListPendingIngestPaths(repoId: number): Promise<string[]> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/ingest-paths`, {
-    headers: headers(),
-  });
-  return parseJson<string[]>(res);
+export async function adminListPendingIngestPaths(repoId: string): Promise<string[]> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void repoId;
+  throw new Error("Not implemented: adminListPendingIngestPaths — pending migration.");
 }
 
 export async function adminIngestOnePending(
-  repoId: number,
+  repoId: string,
   path: string,
 ): Promise<SinglePathIngestResultDto> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/ingest-one`, {
-    method: "POST",
-    headers: {
-      ...headers(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ path }),
-  });
-  return parseJson<SinglePathIngestResultDto>(res);
-}
-
-export async function adminFinishPendingIndex(repoId: number): Promise<CellRepoResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/index/finish`, {
+  // soporte-rag-mt: POST /api/v1/repositorios/indexar-archivo
+  const res = await fetch(`${apiBase()}/api/v1/repositorios/indexar-archivo`, {
     method: "POST",
     headers: headers(),
+    body: JSON.stringify({ urlRepo: repoId, filePath: path }),
   });
-  return parseJson<CellRepoResponse>(res);
+  const r = await parseJson<any>(res);
+  return {
+    indexed: r.exitoso,
+    skipped: !r.exitoso,
+    path: r.filePath || path,
+    chunksIndexed: r.exitoso ? 1 : 0,
+    skipReason: !r.exitoso ? r.mensaje : null,
+    errorMessage: !r.exitoso ? r.mensaje : null,
+  };
 }
 
-export async function adminAbortPendingIndex(repoId: number): Promise<void> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/index/abort`, {
-    method: "POST",
-    headers: headers(),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text || res.statusText;
-    try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg);
-  }
+export async function adminFinishPendingIndex(repoId: string): Promise<CellRepoResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void repoId;
+  throw new Error("Not implemented: adminFinishPendingIndex — pending migration.");
 }
 
-export async function adminAssignReposToCell(cellId: number, repoIds: number[]): Promise<CellRepoResponse[]> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/assign`, {
-    method: "POST",
-    headers: {
-      ...headers(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ repoIds }),
-  });
-  return parseJson<CellRepoResponse[]>(res);
+export async function adminAbortPendingIndex(repoId: string): Promise<void> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void repoId;
+  throw new Error("Not implemented: adminAbortPendingIndex — pending migration.");
 }
 
-export async function adminDeletePendingRepo(repoId: number): Promise<void> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}`, {
+export async function adminAssignReposToCell(cellId: string, repoIds: string[]): Promise<CellRepoResponse[]> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  // soporte-rag-mt no tiene assign-to-cell endpoint.
+  void cellId;
+  void repoIds;
+  throw new Error("Not implemented: adminAssignReposToCell — pending migration.");
+}
+
+export async function adminDeletePendingRepo(repoId: string): Promise<void> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void repoId;
+  throw new Error("Not implemented: adminDeletePendingRepo — pending migration.");
+}
+
+export async function adminDeleteRepo(cellId: string, repoId: string): Promise<void> {
+  // soporte-rag-mt: DELETE /api/v1/celulas/{codigoCelula}/repositorios?urlRepo={repoId}
+  const res = await fetch(`${apiBase()}/api/v1/celulas/${cellId}/repositorios?urlRepo=${encodeURIComponent(repoId)}`, {
     method: "DELETE",
     headers: headers(),
   });
@@ -776,170 +879,504 @@ export async function adminDeletePendingRepo(repoId: number): Promise<void> {
   }
 }
 
-export async function adminDeleteRepo(cellId: number, repoId: number): Promise<void> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}`, {
-    method: "DELETE",
+/** Lista todas las ramas de un repositorio remoto. La primera es la principal. */
+export async function fetchRepoBranches(repoUrl: string): Promise<Array<{nombre: string; commit: string}>> {
+  const res = await fetch(
+    `${apiBase()}/api/v1/repositorios/ramas?url=${encodeURIComponent(repoUrl)}`,
+    { headers: headers() },
+  );
+  if (!res.ok) return [];
+  return parseJson<Array<{nombre: string; commit: string}>>(res);
+}
+
+/** Actualiza un repositorio (cambio de rama, tags, reindexar si cambió rama). */
+export async function updateRepo(body: {
+  url: string;
+  ramaPrincipal?: string;
+  descripcion?: string;
+  tags?: string[];
+}): Promise<unknown> {
+  const res = await fetch(`${apiBase()}/api/v1/repositorios`, {
+    method: "PUT",
     headers: headers(),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text || res.statusText;
-    try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
-    } catch {
-      /* ignore */
+  return parseJson<unknown>(res);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Repo tree / file browsing
+// TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+// soporte-rag-mt no expone tree/file endpoints.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function adminFetchRepoTree(_cellId: string, repoId: string): Promise<FolderStructureDto> {
+  try {
+    const res = await fetch(`${apiBase()}/api/v1/repositorios?url=${encodeURIComponent(repoId)}`, { headers: headers() });
+    if (res.ok) {
+      const r = await parseJson<any>(res);
+      const paths = (r.filesPath && r.filesPath.length > 0) ? r.filesPath : (r.archivosS3Workarea || []);
+      return buildFolderTree(paths);
     }
-    throw new Error(msg);
+  } catch {
+    // ignore
   }
+  return { folder: "", archivos: [], folders: [] };
 }
 
-/** Asegura arrays y anidación aunque el JSON venga incompleto. */
-function normalizeFolderStructure(raw: unknown): FolderStructureDto {
-  if (raw == null || typeof raw !== "object") {
-    return { folder: "", archivos: [], folders: [] };
+export async function adminFetchRepoFile(_cellId: string, repoId: string, path: string): Promise<FileContentResponse> {
+  if (repoId.includes("github.com")) {
+    try {
+      const cleanUrl = repoId.replace(/\.git$/, "");
+      const match = cleanUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+      if (match) {
+        const [, owner, repo] = match;
+        let branch = "main";
+        try {
+          const repoRes = await fetch(`${apiBase()}/api/v1/repositorios?url=${encodeURIComponent(repoId)}`, { headers: headers() });
+          if (repoRes.ok) {
+            const r = await repoRes.json();
+            branch = r.ramaPrincipal || "main";
+          }
+        } catch {
+          // ignore
+        }
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
+        const rawRes = await fetch(rawUrl);
+        if (rawRes.ok) {
+          const content = await rawRes.text();
+          return { path, content, encoding: "utf-8" };
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
-  const o = raw as Record<string, unknown>;
-  const folder = typeof o.folder === "string" ? o.folder : "";
-  const archivos = Array.isArray(o.archivos)
-    ? (o.archivos.filter((x) => typeof x === "string") as string[])
-    : [];
-  const foldersRaw = Array.isArray(o.folders) ? o.folders : [];
-  const folders = foldersRaw.map((f) => normalizeFolderStructure(f));
-  return { folder, archivos, folders };
+  return {
+    path,
+    content: `// Vista previa de ${path}\n// El contenido real del archivo se encuentra en el repositorio Git.`,
+    encoding: "utf-8",
+  };
 }
 
-export async function adminFetchRepoTree(cellId: number, repoId: number): Promise<FolderStructureDto> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}/tree`, { headers: headers() });
-  const data = await parseJson<unknown>(res);
-  return normalizeFolderStructure(data);
+export async function adminFetchPendingRepoTree(repoId: string): Promise<FolderStructureDto> {
+  return adminFetchRepoTree("", repoId);
 }
 
-export async function adminFetchRepoFile(cellId: number, repoId: number, path: string): Promise<FileContentResponse> {
-  const q = encodeURIComponent(path);
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}/file?path=${q}`, { headers: headers() });
-  return parseJson<FileContentResponse>(res);
+export async function adminFetchPendingRepoFile(repoId: string, path: string): Promise<FileContentResponse> {
+  return adminFetchRepoFile("", repoId, path);
 }
 
-export async function adminFetchPendingRepoTree(repoId: number): Promise<FolderStructureDto> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/tree`, { headers: headers() });
-  const data = await parseJson<unknown>(res);
-  return normalizeFolderStructure(data);
-}
-
-export async function adminFetchPendingRepoFile(repoId: number, path: string): Promise<FileContentResponse> {
-  const q = encodeURIComponent(path);
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/file?path=${q}`, { headers: headers() });
-  return parseJson<FileContentResponse>(res);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Support Markdown upload/delete/update (per cell/repo)
+// TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+// soporte-rag-mt maneja soportes via /api/v1/soportes
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function adminUploadCellSupportMarkdown(
-  cellId: number,
-  repoId: number,
+  cellId: string,
+  repoId: string,
   file: File,
   huCode: string,
   huTitle: string,
 ): Promise<SupportMarkdownUploadResponse> {
-  const fd = new FormData();
-  fd.append("file", file, file.name);
-  fd.append("huCode", huCode);
-  fd.append("huTitle", huTitle);
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}/support/markdown`, {
+  void cellId;
+  const content = await file.text();
+  const contenidoBase64 = btoa(unescape(encodeURIComponent(content)));
+  const nombre = file.name.replace(/\.[^.]+$/, "");
+  const body = {
+    codigo: nombre.replace(/[^a-zA-Z0-9_-]/g, "_"),
+    nombre,
+    descripcion: `${huCode} - ${huTitle}`,
+    urlRepo: repoId,
+    nombreArchivo: file.name,
+    contenidoBase64,
+  };
+  const res = await fetch(`${apiBase()}/api/v1/soportes`, {
     method: "POST",
-    headers: headersMultipart(),
-    body: fd,
+    headers: headers(),
+    body: JSON.stringify(body),
   });
   return parseJson<SupportMarkdownUploadResponse>(res);
 }
 
 export async function adminUploadPendingSupportMarkdown(
-  repoId: number,
+  repoId: string,
   file: File,
   huCode: string,
   huTitle: string,
 ): Promise<SupportMarkdownUploadResponse> {
-  const fd = new FormData();
-  fd.append("file", file, file.name);
-  fd.append("huCode", huCode);
-  fd.append("huTitle", huTitle);
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/support/markdown`, {
+  const content = await file.text();
+  const contenidoBase64 = btoa(unescape(encodeURIComponent(content)));
+  const nombre = file.name.replace(/\.[^.]+$/, "");
+  const body = {
+    codigo: nombre.replace(/[^a-zA-Z0-9_-]/g, "_"),
+    nombre,
+    descripcion: `${huCode} - ${huTitle}`,
+    urlRepo: repoId,
+    nombreArchivo: file.name,
+    contenidoBase64,
+  };
+  const res = await fetch(`${apiBase()}/api/v1/soportes`, {
     method: "POST",
-    headers: headersMultipart(),
-    body: fd,
+    headers: headers(),
+    body: JSON.stringify(body),
   });
   return parseJson<SupportMarkdownUploadResponse>(res);
 }
 
-export async function adminDeleteCellSupportMarkdown(cellId: number, repoId: number, fileName: string): Promise<void> {
+export async function adminDeleteCellSupportMarkdown(cellId: string, repoId: string, fileName: string): Promise<void> {
+  void cellId;
+  void repoId;
   const q = encodeURIComponent(fileName);
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}/support/markdown?fileName=${q}`, {
+  const res = await fetch(`${apiBase()}/api/v1/soportes/${q}`, {
     method: "DELETE",
     headers: headers(),
   });
   if (!res.ok) {
     const text = await res.text();
-    let msg = text || res.statusText;
-    try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg);
+    throw new Error(text || res.statusText);
   }
 }
 
-export async function adminDeletePendingSupportMarkdown(repoId: number, fileName: string): Promise<void> {
+export async function adminDeletePendingSupportMarkdown(repoId: string, fileName: string): Promise<void> {
+  void repoId;
   const q = encodeURIComponent(fileName);
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/support/markdown?fileName=${q}`, {
+  const res = await fetch(`${apiBase()}/api/v1/soportes/${q}`, {
     method: "DELETE",
     headers: headers(),
   });
   if (!res.ok) {
     const text = await res.text();
-    let msg = text || res.statusText;
-    try {
-      const j = JSON.parse(text) as { error?: string; message?: string };
-      msg = j.message ?? j.error ?? msg;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg);
+    throw new Error(text || res.statusText);
   }
 }
 
 export async function adminUpdateCellSupportMarkdown(
-  cellId: number,
-  repoId: number,
+  cellId: string,
+  repoId: string,
   fileName: string,
   content: string,
 ): Promise<SupportMarkdownUploadResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/${cellId}/repos/${repoId}/support/markdown`, {
+  void cellId;
+  void repoId;
+  const contenidoBase64 = btoa(unescape(encodeURIComponent(content)));
+  const nombre = fileName.replace(/\.[^.]+$/, "");
+  const body = {
+    nombre,
+    descripcion: "",
+    contenidoBase64,
+  };
+  const q = encodeURIComponent(fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_"));
+  const res = await fetch(`${apiBase()}/api/v1/soportes/${q}`, {
     method: "PUT",
-    headers: {
-      ...headers(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ fileName, content }),
+    headers: headers(),
+    body: JSON.stringify(body),
   });
   return parseJson<SupportMarkdownUploadResponse>(res);
 }
 
 export async function adminUpdatePendingSupportMarkdown(
-  repoId: number,
+  repoId: string,
   fileName: string,
   content: string,
 ): Promise<SupportMarkdownUploadResponse> {
-  const res = await fetch(`${apiBase()}/admin/cells/pending/${repoId}/support/markdown`, {
+  void repoId;
+  const contenidoBase64 = btoa(unescape(encodeURIComponent(content)));
+  const nombre = fileName.replace(/\.[^.]+$/, "");
+  const body = {
+    nombre,
+    descripcion: "",
+    contenidoBase64,
+  };
+  const q = encodeURIComponent(fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_"));
+  const res = await fetch(`${apiBase()}/api/v1/soportes/${q}`, {
     method: "PUT",
-    headers: {
-      ...headers(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ fileName, content }),
+    headers: headers(),
+    body: JSON.stringify(body),
   });
   return parseJson<SupportMarkdownUploadResponse>(res);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tasks (Tareas) — mapped to soporte-rag-mt /api/v1/tareas
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function createTask(body: TaskCreateRequest): Promise<TaskResponse> {
+  const code = randomUuid();
+  const payload = {
+    codigoCelula: body.cellId,
+    urlRepo: body.cellRepoId,
+    codigoUsuario: getUserId(),
+    codigoTarea: code,
+    titulo: body.huCode,
+    enunciadoPrincipal: body.enunciado,
+  };
+  const res = await fetch(`${apiBase()}/api/v1/tareas`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(payload),
+  });
+  const t = await parseJson<any>(res);
+  return {
+    id: t.codigoTarea,
+    userId: t.codigoUsuario,
+    huCode: t.titulo,
+    cellRepoId: t.urlRepo,
+    enunciado: t.enunciadoPrincipal,
+    status: t.estadoTarea,
+    createdAt: null,
+    continuedAt: null,
+    chatConversationId: t.codigoTarea,
+  };
+}
+
+/** Lista tareas del usuario actual. */
+export async function fetchTasks(cellId?: string): Promise<TaskResponse[]> {
+  const userId = getUserId();
+  const url = `${apiBase()}/api/v1/tareas/usuario/${encodeURIComponent(userId)}`;
+  const res = await fetch(url, { headers: headers() });
+  const raw = await parseJson<any[]>(res);
+  let filtered = raw;
+  if (cellId) {
+    filtered = raw.filter((t) => t.codigoCelula === cellId);
+  }
+  return filtered.map((t) => ({
+    id: t.codigoTarea,
+    userId: t.codigoUsuario,
+    huCode: t.titulo,
+    cellRepoId: t.urlRepo,
+    enunciado: t.enunciadoPrincipal,
+    status: t.estadoTarea,
+    createdAt: null,
+    continuedAt: null,
+    chatConversationId: t.codigoTarea,
+  }));
+}
+
+export async function getTask(id: string): Promise<TaskResponse> {
+  const all = await fetchTasks();
+  const found = all.find((t) => t.id === id);
+  if (!found) throw new Error(`Tarea ${id} no encontrada.`);
+  return found;
+}
+
+export async function continueTask(taskId: string): Promise<TaskContinueResponse> {
+  const task = await getTask(taskId);
+  const repoName = parseGitRepoNameFromHttpsUrl(task.cellRepoId) || "repo";
+  return {
+    taskId: task.id,
+    huCode: task.huCode,
+    cellRepoId: task.cellRepoId,
+    gitConnect: {
+      mode: task.cellRepoId.startsWith("local:") ? "LOCAL" : "HTTPS_PUBLIC",
+      repositoryUrl: task.cellRepoId,
+      localPath: task.cellRepoId.startsWith("local:") ? task.cellRepoId.substring(6) : undefined,
+      vectorNamespace: newVectorNamespaceFromRepoName(repoName),
+    },
+    initialChatPrompt: `Hola, estoy trabajando en la tarea ${task.huCode} en el repositorio ${repoName}. ¿En qué me puedes ayudar?`,
+    vectorNamespaceHint: newVectorNamespaceFromRepoName(repoName),
+    cellName: task.chatConversationId || null,
+    chatConversationId: task.chatConversationId || null,
+  };
+}
+
+/** Cambia el estado de una tarea. */
+export async function updateTaskStatus(codigoTarea: string, nuevoEstado: string): Promise<unknown> {
+  const res = await fetch(`${apiBase()}/api/v1/tareas/${encodeURIComponent(codigoTarea)}/estado`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ nuevoEstado }),
+  });
+  return parseJson<unknown>(res);
+}
+
+/** Actualiza una tarea (titulo, enunciado). Solo en BORRADOR. */
+export async function updateTask(codigoTarea: string, body: {
+  titulo?: string;
+  enunciadoPrincipal?: string;
+  urlRepo?: string;
+}): Promise<unknown> {
+  const res = await fetch(`${apiBase()}/api/v1/tareas/${encodeURIComponent(codigoTarea)}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  return parseJson<unknown>(res);
+}
+
+/** Elimina una tarea. */
+export async function deleteTask(codigoTarea: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/v1/tareas/${encodeURIComponent(codigoTarea)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Support (Soportes) — mapped to soporte-rag-mt /api/v1/soportes
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface SoporteResponseDto {
+  codigo: string;
+  nombre: string;
+  descripcion: string;
+  urlRepo: string;
+  nombreArchivo?: string;
+  bucket?: string;
+  keyS3?: string;
+  urlDescargaS3?: string;
+  urlS3?: string;
+  pathsChunkVectorial?: string[];
+}
+
+export async function listSupportMarkdownObjects(cellRepoId: string): Promise<SupportMarkdownObjectDto[]> {
+  // soporte-rag-mt: GET /api/v1/soportes?urlRepo={urlRepo}
+  const url = `${apiBase()}/api/v1/soportes?urlRepo=${encodeURIComponent(cellRepoId)}`;
+  const res = await fetch(url, { headers: headers() });
+  if (res.status === 404) return [];
+  const dtoList = await parseJson<SoporteResponseDto[]>(res);
+  return dtoList.map(item => ({
+    bucket: item.bucket ?? "",
+    objectKey: item.keyS3 ?? "",
+    fileName: item.codigo ?? "",
+    url: item.urlS3 || item.urlDescargaS3 || "",
+    displayLabel: item.nombre ?? item.descripcion ?? null
+  }));
+}
+
+/** Descarga texto desde URL presignada S3 (GET /support/markdown/object eliminado). */
+export async function fetchTextFromPresignedUrl(url: string, init?: { signal?: AbortSignal }): Promise<string> {
+  let finalUrl = url;
+  if (finalUrl.includes("localstack:4566")) {
+    const match = finalUrl.match(/^https?:\/\/([^/:]+)\.localstack:4566\/(.*)$/);
+    if (match) {
+      const bucket = match[1];
+      const keyPath = match[2];
+      const cleanKeyPath = keyPath.startsWith("/") ? keyPath.substring(1) : keyPath;
+      finalUrl = `/s3-proxy/${bucket}/${cleanKeyPath}`;
+    } else {
+      finalUrl = finalUrl.replace(/https?:\/\/[^/:]+:4566/, "/s3-proxy");
+    }
+  }
+  const res = await fetch(finalUrl, { method: "GET", signal: init?.signal });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+  return res.text();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tags — mapped to soporte-rag-mt /api/v1/tags
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function fetchTags(): Promise<TagsResponse> {
+  const res = await fetch(`${apiBase()}/api/v1/tags`, { headers: headers() });
+  const rawTags = await parseJson<TagDetail[]>(res);
+  // Convertir array de TagDetail al formato TagsResponse que usa el frontend
+  const tags = rawTags.map((t) => t.tag);
+  const toolsByTag: Record<string, Array<{ id: string; title: string; url: string; hint?: string }>> = {};
+  for (const t of rawTags) {
+    if (t.herramientasUrls && t.herramientasUrls.length > 0) {
+      toolsByTag[t.tag] = t.herramientasUrls.map((h, i) => ({
+        id: `${t.tag}-${i}`,
+        title: h.contextoUrl || h.urlTool,
+        url: h.urlTool,
+        hint: h.contextoUrl,
+      }));
+    }
+  }
+  return { tags, toolsByTag };
+}
+
+/** Tag response from the backend */
+export interface TagDetail {
+  tag: string;
+  descripcionTag: string | null;
+  habilitado: boolean;
+  herramientasUrls: Array<{ urlTool: string; contextoUrl: string }>;
+}
+
+/** Lista todos los tags con sus herramientas. */
+export async function fetchAllTags(): Promise<TagDetail[]> {
+  const res = await fetch(`${apiBase()}/api/v1/tags`, { headers: headers() });
+  return parseJson<TagDetail[]>(res);
+}
+
+/** Crea un nuevo tag. */
+export async function createTag(body: {
+  tag: string;
+  descripcionTag?: string;
+  herramientasUrls?: Array<{ urlTool: string; contextoUrl: string }>;
+}): Promise<TagDetail> {
+  const res = await fetch(`${apiBase()}/api/v1/tags`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  return parseJson<TagDetail>(res);
+}
+
+/** Actualiza un tag existente. */
+export async function updateTag(nombreTag: string, body: {
+  descripcionTag?: string;
+  habilitado?: boolean;
+}): Promise<unknown> {
+  const res = await fetch(`${apiBase()}/api/v1/tags/${encodeURIComponent(nombreTag)}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  return parseJson<unknown>(res);
+}
+
+/** Elimina un tag. */
+export async function deleteTag(nombreTag: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/v1/tags/${encodeURIComponent(nombreTag)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+}
+
+/** Agrega una URL tool a un tag. */
+export async function addTagTool(nombreTag: string, urlTool: string, contextoUrl: string): Promise<void> {
+  const params = new URLSearchParams({ urlTool, contextoUrl });
+  const res = await fetch(`${apiBase()}/api/v1/tags/${encodeURIComponent(nombreTag)}/tools?${params}`, {
+    method: "POST",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+}
+
+/** Elimina una URL tool de un tag. */
+export async function removeTagTool(nombreTag: string, urlTool: string): Promise<void> {
+  const params = new URLSearchParams({ urlTool });
+  const res = await fetch(`${apiBase()}/api/v1/tags/${encodeURIComponent(nombreTag)}/tools?${params}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utility / naming
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** Nombre del repo desde URL HTTPS terminada en `.git` (segmento tras el último `/`). */
 export function parseGitRepoNameFromHttpsUrl(url: string): string | null {
@@ -961,31 +1398,63 @@ export function newVectorNamespaceFromRepoName(name: string): string {
   return `${safe}-${u}`.slice(0, 500);
 }
 
-export async function fetchTags(): Promise<TagsResponse> {
-  const res = await fetch(`${apiBase()}/tags`, { headers: headers() });
-  return parseJson<TagsResponse>(res);
-}
-
-export async function fetchFileContent(queryPath: string): Promise<FileContentResponse> {
-  const q = encodeURIComponent(queryPath);
-  const res = await fetch(`${apiBase()}/files/content?query=${q}`, { headers: headers() });
+export async function fetchFileContent(queryPath: string, repoUrl?: string, rama?: string): Promise<FileContentResponse> {
+  if (!repoUrl) {
+    throw new Error("Se requiere URL del repo para obtener el contenido del archivo.");
+  }
+  // Si no se especifica rama, detectar la principal
+  let branch = rama;
+  if (!branch) {
+    try {
+      const res = await fetch(
+        `${apiBase()}/api/v1/repositorios/rama-principal?url=${encodeURIComponent(repoUrl)}`,
+        { headers: headers() },
+      );
+      if (res.ok) {
+        const data = await res.json() as { ramaPrincipal?: string };
+        branch = data.ramaPrincipal ?? "main";
+      } else {
+        branch = "main";
+      }
+    } catch {
+      branch = "main";
+    }
+  }
+  const params = new URLSearchParams({ url: repoUrl, rama: branch, filePath: queryPath });
+  const res = await fetch(`${apiBase()}/api/v1/repositorios/archivo?${params}`, {
+    headers: headers(),
+  });
   return parseJson<FileContentResponse>(res);
 }
 
-/** Sube Markdown de soporte a S3 y genera embeddings (requiere DOCVIZ_SUPPORT_ENABLED en el backend). */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Support markdown (legacy user-facing upload)
+// ─────────────────────────────────────────────────────────────────────────────
+
 /** Se lanza cuando el backend no expone POST /support/markdown (p. ej. DOCVIZ_SUPPORT_ENABLED=false). */
 export const SUPPORT_UPLOAD_API_UNAVAILABLE = "SUPPORT_UPLOAD_API_UNAVAILABLE";
 
 export async function uploadSupportMarkdown(
   file: File,
-  init?: { signal?: AbortSignal },
+  init?: { signal?: AbortSignal; urlRepo?: string },
 ): Promise<SupportMarkdownUploadResponse> {
-  const form = new FormData();
-  form.append("file", file, file.name);
-  const res = await fetch(`${apiBase()}/support/markdown`, {
+  // soporte-rag-mt: POST /api/v1/soportes espera JSON con contenidoBase64
+  const content = await file.text();
+  const contenidoBase64 = btoa(unescape(encodeURIComponent(content)));
+  const nombre = file.name.replace(/\.[^.]+$/, "");
+  const body = {
+    codigo: nombre.replace(/[^a-zA-Z0-9_-]/g, "_"),
+    nombre,
+    descripcion: "",
+    urlRepo: init?.urlRepo ?? "",
+    nombreArchivo: file.name,
+    contenidoBase64,
+  };
+  const res = await fetch(`${apiBase()}/api/v1/soportes`, {
     method: "POST",
-    headers: headersMultipart(),
-    body: form,
+    headers: headers(),
+    body: JSON.stringify(body),
     signal: init?.signal,
   });
   if (res.status === 404) {
@@ -995,315 +1464,12 @@ export async function uploadSupportMarkdown(
 }
 
 export async function deleteSupportMarkdown(fileName: string): Promise<void> {
+  // soporte-rag-mt: DELETE /api/v1/soportes/{codigo}
   const q = encodeURIComponent(fileName);
-  const res = await fetch(`${apiBase()}/support/markdown?fileName=${q}`, {
+  const res = await fetch(`${apiBase()}/api/v1/soportes/${q}`, {
     method: "DELETE",
     headers: headers(),
   });
-  await parseJson<Record<string, unknown>>(res);
-}
-
-export async function vectorIngest(init?: { signal?: AbortSignal }): Promise<VectorIngestResponse> {
-  const res = await fetch(`${apiBase()}/vector/ingest`, {
-    method: "POST",
-    headers: headers(),
-    signal: init?.signal,
-  });
-  return parseJson<VectorIngestResponse>(res);
-}
-
-export type WorkAreaRequestInit = { signal?: AbortSignal; taskHuCode?: string; cellLabel?: string };
-
-/** Restaura borradores y workarea desde S3 al clon (POST /vector/work-area/restore-s3). Requiere sesión Git. */
-/** Lista objetos S3 (borradores o workarea) con URL presignada. Requiere cabecera HU. */
-export async function listWorkAreaS3Objects(
-  kind: "borradores" | "workarea",
-  init?: WorkAreaRequestInit,
-): Promise<WorkAreaS3ObjectDto[]> {
-  const q = encodeURIComponent(kind);
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-objects?kind=${q}`, {
-    method: "GET",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  if (res.status === 404) return [];
-  return parseJson<WorkAreaS3ObjectDto[]>(res);
-}
-
-/** GET /vector/work-area/s3-artifacts: borradores + workarea; query userId y taskHu (deben coincidir con sesión y cabecera HU). */
-export async function fetchWorkAreaS3Artifacts(
-  userId: string,
-  taskHu: string,
-  init?: WorkAreaRequestInit,
-): Promise<WorkAreaS3ObjectDto[]> {
-  const u = encodeURIComponent(userId.trim());
-  const t = encodeURIComponent(taskHu.trim());
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-artifacts?userId=${u}&taskHu=${t}`, {
-    method: "GET",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode ?? taskHu, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  if (res.status === 404) return [];
-  return parseJson<WorkAreaS3ObjectDto[]>(res);
-}
-
-/** GET /vector/work-area/s3-artifact-body: texto UTF-8 (mismo origen que el API; evita CORS con LocalStack). */
-export async function fetchWorkAreaS3ArtifactBody(
-  bucket: string,
-  objectKey: string,
-  init?: WorkAreaRequestInit,
-): Promise<string> {
-  const b = encodeURIComponent(bucket.trim());
-  const k = encodeURIComponent(objectKey.trim());
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-artifact-body?bucket=${b}&key=${k}`, {
-    method: "GET",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
-  }
-  return res.text();
-}
-
-export async function deleteWorkAreaS3Artifact(
-  bucket: string,
-  objectKey: string,
-  init?: WorkAreaRequestInit,
-): Promise<void> {
-  const b = encodeURIComponent(bucket.trim());
-  const k = encodeURIComponent(objectKey.trim());
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-artifact?bucket=${b}&key=${k}`, {
-    method: "DELETE",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
-  }
-}
-
-/** POST /vector/work-area/s3-workarea-save — persiste en S3 y reindexa (pgvector). */
-export async function saveWorkAreaS3WorkareaAndReindex(
-  body: { objectKey: string; content: string },
-  init?: WorkAreaRequestInit,
-): Promise<VectorIngestResponse> {
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-workarea-save`, {
-    method: "POST",
-    headers: {
-      ...headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  return parseJson<VectorIngestResponse>(res);
-}
-
-/** POST /vector/work-area/s3-borrador-save — objeto en bucket borradores (sin reindexar). */
-export async function saveWorkAreaS3BorradorContent(
-  body: { objectKey: string; content: string },
-  init?: WorkAreaRequestInit,
-): Promise<void> {
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-borrador-save`, {
-    method: "POST",
-    headers: {
-      ...headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
-  }
-}
-
-/** POST /vector/work-area/s3-borrador-promote — borrador → workarea + pgvector; borra el objeto en borradores. */
-export async function promoteWorkAreaBorradorToWorkarea(
-  body: { objectKey: string; content: string },
-  init?: WorkAreaRequestInit,
-): Promise<WorkAreaS3PromoteResponse> {
-  const res = await fetch(`${apiBase()}/vector/work-area/s3-borrador-promote`, {
-    method: "POST",
-    headers: {
-      ...headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  return parseJson<WorkAreaS3PromoteResponse>(res);
-}
-
-export async function restoreWorkAreaFromS3(init?: WorkAreaRequestInit): Promise<TaskArtifactRestoreResponse> {
-  const res = await fetch(`${apiBase()}/vector/work-area/restore-s3`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  return parseJson<TaskArtifactRestoreResponse>(res);
-}
-
-/** Indexa un borrador del área de trabajo en el namespace del repo conectado (POST /vector/work-area/ingest). */
-export async function ingestWorkAreaFile(
-  body: { fileName: string; content: string },
-  init?: WorkAreaRequestInit,
-): Promise<VectorIngestResponse> {
-  const res = await fetch(`${apiBase()}/vector/work-area/ingest`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  return parseJson<VectorIngestResponse>(res);
-}
-
-/** Aplica hunks aceptados (JSON del LLM), o escribe texto final con {@code finalContent} (evita errores de ancla). */
-export async function applyWorkAreaReview(
-  body: {
-    sourcePath: string;
-    draftVersion: number;
-    changeBlocks?: WorkAreaChangeBlock[];
-    accepted?: boolean[];
-    /** Si viene relleno, el backend ignora hunks (mismo criterio que apply-final). */
-    finalContent?: string;
-  },
-  init?: WorkAreaRequestInit,
-): Promise<{ acceptedRelativePath: string }> {
-  const res = await fetch(`${apiBase()}/vector/work-area/apply-review`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  return parseJson<{ acceptedRelativePath: string }>(res);
-}
-
-/** Escribe *_vN.ext con el texto ya resuelto (vista merge de un solo bloque). */
-export async function applyWorkAreaFinal(
-  body: { sourcePath: string; draftVersion: number; finalContent: string },
-  init?: WorkAreaRequestInit,
-): Promise<{ acceptedRelativePath: string }> {
-  const res = await fetch(`${apiBase()}/vector/work-area/apply-final`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  return parseJson<{ acceptedRelativePath: string }>(res);
-}
-
-/** Acepta borrador .txt → escribe *_vN.ext y borra el .txt (no indexa). */
-export async function acceptWorkAreaDraft(
-  draftRelativePath: string,
-  init?: WorkAreaRequestInit,
-): Promise<{ acceptedRelativePath: string }> {
-  const res = await fetch(`${apiBase()}/vector/work-area/draft/accept`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify({ draftRelativePath }),
-    signal: init?.signal,
-  });
-  return parseJson<{ acceptedRelativePath: string }>(res);
-}
-
-/** Borrador resuelto desde la UI → escribe *_vN.ext, borra borrador local y en S3, sincroniza workarea S3. */
-export async function finalizeWorkAreaDraft(
-  body: { draftRelativePath: string; finalContent: string },
-  init?: WorkAreaRequestInit,
-): Promise<{ acceptedRelativePath: string }> {
-  const res = await fetch(`${apiBase()}/vector/work-area/draft/finalize`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify(body),
-    signal: init?.signal,
-  });
-  return parseJson<{ acceptedRelativePath: string }>(res);
-}
-
-export async function acceptAllWorkAreaDrafts(
-  draftRelativePaths: string[],
-  init?: WorkAreaRequestInit,
-): Promise<{ acceptedRelativePaths: string[] }> {
-  const res = await fetch(`${apiBase()}/vector/work-area/draft/accept-all`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify({ draftRelativePaths }),
-    signal: init?.signal,
-  });
-  return parseJson<{ acceptedRelativePaths: string[] }>(res);
-}
-
-/** Lee el texto del borrador en el clon (GET) — misma ruta que DELETE, método distinto. */
-export async function fetchWorkAreaDraftContent(
-  draftRelativePath: string,
-  init?: WorkAreaRequestInit,
-): Promise<{ content: string }> {
-  const q = encodeURIComponent(draftRelativePath);
-  const res = await fetch(`${apiBase()}/vector/work-area/draft?path=${q}`, {
-    method: "GET",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  return parseJson<{ content: string }>(res);
-}
-
-export async function deleteWorkAreaDraft(path: string, init?: WorkAreaRequestInit): Promise<void> {
-  const q = encodeURIComponent(path);
-  const res = await fetch(`${apiBase()}/vector/work-area/draft?path=${q}`, {
-    method: "DELETE",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    signal: init?.signal,
-  });
-  await parseJson<Record<string, unknown>>(res);
-}
-
-/** Indexa un archivo ya aceptado en disco (p. ej. `customer-service/pom_v1.xml`). */
-export async function indexWorkAreaFileFromPath(
-  relativePath: string,
-  init?: WorkAreaRequestInit,
-): Promise<VectorIngestResponse> {
-  const res = await fetch(`${apiBase()}/vector/work-area/index-file`, {
-    method: "POST",
-    headers: headers(docvizTaskContextHeaders(init?.taskHuCode, init?.cellLabel)),
-    body: JSON.stringify({ relativePath }),
-    signal: init?.signal,
-  });
-  return parseJson<VectorIngestResponse>(res);
-}
-
-/** Vacía el índice vectorial del repo actual (pgvector: borra filas del namespace). */
-export async function vectorClearIndex(): Promise<VectorClearResponse> {
-  const res = await fetch(`${apiBase()}/vector/index`, {
-    method: "DELETE",
-    headers: headers(),
-  });
-  return parseJson<VectorClearResponse>(res);
-}
-
-/**
- * Ingesta con streaming NDJSON: emite START, FILE, PROGRESS por archivo y DONE (o ERROR).
- */
-export async function vectorIngestStream(
-  onProgress: (ev: IngestProgressEvent) => void,
-  init?: { signal?: AbortSignal },
-): Promise<VectorIngestResponse> {
-  const res = await fetch(`${apiBase()}/vector/ingest/stream`, {
-    method: "POST",
-    headers: {
-      ...headers(),
-      Accept: "application/x-ndjson, application/json;q=0.9, */*;q=0.1",
-    },
-    signal: init?.signal,
-  });
-  // Backend antiguo o preview sin proxy: no existe la ruta de streaming; usar ingesta clásica.
-  if (res.status === 404) {
-    return vectorIngestFallbackProgress(onProgress);
-  }
   if (!res.ok) {
     const text = await res.text();
     let msg = text || res.statusText;
@@ -1315,68 +1481,261 @@ export async function vectorIngestStream(
     }
     throw new Error(msg);
   }
-  const reader = res.body?.getReader();
-  if (!reader) {
-    throw new Error("Respuesta de ingesta sin cuerpo legible");
-  }
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let lastDone: VectorIngestResponse | null = null;
-
-  function consumeNdjsonLine(trimmed: string): void {
-    if (!trimmed) return;
-    const ev = JSON.parse(trimmed) as IngestProgressEvent;
-    onProgress(ev);
-    if (ev.phase === "DONE") {
-      lastDone = {
-        filesProcessed: ev.filesProcessed ?? 0,
-        chunksIndexed: ev.chunksIndexed ?? 0,
-        skipped: ev.skipped ?? [],
-        namespace: ev.namespace ?? "",
-      };
-    }
-    if (ev.phase === "ERROR") {
-      throw new Error(ev.error ?? "Error de ingesta");
-    }
-  }
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      // Últimos bytes del decoder (caracteres UTF-8 partidos entre chunks)
-      buffer += decoder.decode();
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      consumeNdjsonLine(line.trim());
-    }
-  }
-  // La última línea suele ir sin \n al cerrar el stream; antes se quedaba sin parsear (faltaba DONE).
-  const tail = buffer.trim();
-  if (tail) {
-    consumeNdjsonLine(tail);
-  }
-  if (!lastDone) {
-    const hint =
-      import.meta.env.VITE_API_URL === "/api" || String(import.meta.env.VITE_API_URL ?? "").endsWith("/api")
-        ? " Suele pasar si el proxy de Vite cierra la conexión larga: en frontend-sesion1/.env pon VITE_API_URL=http://127.0.0.1:8080 (CORS ya está permitido) y reinicia npm run dev."
-        : "";
-    throw new Error(
-      "La ingesta terminó sin confirmación del servidor (no se recibió DONE en el stream)." + hint,
-    );
-  }
-  return lastDone;
 }
 
-/** Ingesta sin NDJSON (sin barra de progreso por archivo); emite START + DONE al terminar. */
-async function vectorIngestFallbackProgress(
-  onProgress: (ev: IngestProgressEvent) => void,
+// ─────────────────────────────────────────────────────────────────────────────
+// Vector / ingest
+// TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+// soporte-rag-mt usa /api/v1/repositorios/indexar para indexación.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function vectorIngest(init?: { signal?: AbortSignal }): Promise<VectorIngestResponse> {
+  // soporte-rag-mt: POST /api/v1/repositorios/indexar
+  const res = await fetch(`${apiBase()}/api/v1/repositorios/indexar`, {
+    method: "POST",
+    headers: headers(),
+    signal: init?.signal,
+  });
+  return parseJson<VectorIngestResponse>(res);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Work Area (S3 + borradores)
+// TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+// soporte-rag-mt no expone work-area endpoints.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type WorkAreaRequestInit = { signal?: AbortSignal; taskHuCode?: string; cellLabel?: string };
+
+export async function listWorkAreaS3Objects(
+  kind: "borradores" | "workarea",
+  init?: WorkAreaRequestInit,
+): Promise<WorkAreaS3ObjectDto[]> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void kind;
+  void init;
+  return [];
+}
+
+export async function fetchWorkAreaS3Artifacts(
+  userId: string,
+  taskHu: string,
+  init?: WorkAreaRequestInit,
+): Promise<WorkAreaS3ObjectDto[]> {
+  void init;
+  // Listar borradores de esta tarea (prefijo = codigoTarea/)
+  const prefix = `${taskHu}/`;
+  try {
+    const borradores = await fetch(
+      `${apiBase()}/api/v1/workspace/archivos?bucket=BORRADORES&prefijo=${encodeURIComponent(prefix)}`,
+      { headers: headers() },
+    );
+    if (!borradores.ok) return [];
+    const borradoresData = await borradores.json() as Array<{ objectKey: string; fileName: string; bucket: string; url: string }>;
+
+    // También listar workarea
+    const workarea = await fetch(
+      `${apiBase()}/api/v1/workspace/archivos?bucket=WORKAREA&prefijo=${encodeURIComponent(prefix)}`,
+      { headers: headers() },
+    );
+    let workareaData: Array<{ objectKey: string; fileName: string; bucket: string; url: string }> = [];
+    if (workarea.ok) {
+      workareaData = await workarea.json() as typeof workareaData;
+    }
+
+    return [...borradoresData, ...workareaData].map((item) => ({
+      objectKey: item.objectKey,
+      fileName: item.fileName,
+      bucket: item.bucket,
+      url: item.url,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchWorkAreaS3ArtifactBody(
+  bucket: string,
+  objectKey: string,
+  init?: WorkAreaRequestInit,
+): Promise<string> {
+  void init;
+  // Generar URL presignada desde el backend y luego hacer GET
+  const res = await fetch(
+    `${apiBase()}/api/v1/workspace/archivos?bucket=${encodeURIComponent(bucket.toUpperCase())}&prefijo=${encodeURIComponent(objectKey)}`,
+    { headers: headers() },
+  );
+  if (!res.ok) throw new Error("No se pudo obtener el archivo");
+  const items = await res.json() as Array<{ url: string }>;
+  if (!items.length) throw new Error("Archivo no encontrado en S3");
+  // Fetch contenido desde la URL presignada
+  const contentRes = await fetch(items[0].url);
+  if (!contentRes.ok) throw new Error("No se pudo descargar el contenido del archivo");
+  return contentRes.text();
+}
+
+export async function deleteWorkAreaS3Artifact(
+  bucket: string,
+  objectKey: string,
+  init?: WorkAreaRequestInit,
+): Promise<void> {
+  void init;
+  const res = await fetch(
+    `${apiBase()}/api/v1/workspace/archivos?bucket=${encodeURIComponent(bucket.toUpperCase())}&clave=${encodeURIComponent(objectKey)}`,
+    { method: "DELETE", headers: headers() },
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Error al eliminar archivo");
+  }
+}
+
+export async function saveWorkAreaS3WorkareaAndReindex(
+  body: { objectKey: string; content: string },
+  init?: WorkAreaRequestInit,
 ): Promise<VectorIngestResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: saveWorkAreaS3WorkareaAndReindex — pending migration.");
+}
+
+export async function saveWorkAreaS3BorradorContent(
+  body: { objectKey: string; content: string },
+  init?: WorkAreaRequestInit,
+): Promise<void> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: saveWorkAreaS3BorradorContent — pending migration.");
+}
+
+export async function promoteWorkAreaBorradorToWorkarea(
+  body: { objectKey: string; content: string },
+  init?: WorkAreaRequestInit,
+): Promise<WorkAreaS3PromoteResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: promoteWorkAreaBorradorToWorkarea — pending migration.");
+}
+
+export async function restoreWorkAreaFromS3(init?: WorkAreaRequestInit): Promise<TaskArtifactRestoreResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void init;
+  throw new Error("Not implemented: restoreWorkAreaFromS3 — pending migration.");
+}
+
+export async function ingestWorkAreaFile(
+  body: { fileName: string; content: string },
+  init?: WorkAreaRequestInit,
+): Promise<VectorIngestResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: ingestWorkAreaFile — pending migration.");
+}
+
+export async function applyWorkAreaReview(
+  body: {
+    sourcePath: string;
+    draftVersion: number;
+    changeBlocks?: WorkAreaChangeBlock[];
+    accepted?: boolean[];
+    finalContent?: string;
+  },
+  init?: WorkAreaRequestInit,
+): Promise<{ acceptedRelativePath: string }> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: applyWorkAreaReview — pending migration.");
+}
+
+export async function applyWorkAreaFinal(
+  body: { sourcePath: string; draftVersion: number; finalContent: string },
+  init?: WorkAreaRequestInit,
+): Promise<{ acceptedRelativePath: string }> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: applyWorkAreaFinal — pending migration.");
+}
+
+export async function acceptWorkAreaDraft(
+  draftRelativePath: string,
+  init?: WorkAreaRequestInit,
+): Promise<{ acceptedRelativePath: string }> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void draftRelativePath;
+  void init;
+  throw new Error("Not implemented: acceptWorkAreaDraft — pending migration.");
+}
+
+export async function finalizeWorkAreaDraft(
+  body: { draftRelativePath: string; finalContent: string },
+  init?: WorkAreaRequestInit,
+): Promise<{ acceptedRelativePath: string }> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void body;
+  void init;
+  throw new Error("Not implemented: finalizeWorkAreaDraft — pending migration.");
+}
+
+export async function acceptAllWorkAreaDrafts(
+  draftRelativePaths: string[],
+  init?: WorkAreaRequestInit,
+): Promise<{ acceptedRelativePaths: string[] }> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void draftRelativePaths;
+  void init;
+  throw new Error("Not implemented: acceptAllWorkAreaDrafts — pending migration.");
+}
+
+export async function fetchWorkAreaDraftContent(
+  draftRelativePath: string,
+  init?: WorkAreaRequestInit,
+): Promise<{ content: string }> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void draftRelativePath;
+  void init;
+  throw new Error("Not implemented: fetchWorkAreaDraftContent — pending migration.");
+}
+
+export async function deleteWorkAreaDraft(path: string, init?: WorkAreaRequestInit): Promise<void> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void path;
+  void init;
+  throw new Error("Not implemented: deleteWorkAreaDraft — pending migration.");
+}
+
+export async function indexWorkAreaFileFromPath(
+  relativePath: string,
+  init?: WorkAreaRequestInit,
+): Promise<VectorIngestResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  void relativePath;
+  void init;
+  throw new Error("Not implemented: indexWorkAreaFileFromPath — pending migration.");
+}
+
+export async function vectorClearIndex(): Promise<VectorClearResponse> {
+  // TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+  throw new Error("Not implemented: vectorClearIndex — pending migration.");
+}
+
+/**
+ * Ingesta con streaming NDJSON.
+ * TODO: Migrate to frontend-side implementation (Git/S3 libraries).
+ * soporte-rag-mt no expone streaming ingest.
+ */
+export async function vectorIngestStream(
+  onProgress: (ev: IngestProgressEvent) => void,
+  init?: { signal?: AbortSignal },
+): Promise<VectorIngestResponse> {
+  // Fallback: usar ingesta síncrona
   onProgress({ phase: "START", totalFiles: 0 });
-  const r = await vectorIngest({});
+  const r = await vectorIngest(init);
   onProgress({
     phase: "DONE",
     filesProcessed: r.filesProcessed,
@@ -1387,21 +1746,12 @@ async function vectorIngestFallbackProgress(
   return r;
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Session / logout
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function logoutSession(): Promise<void> {
-  if (getUserId()) {
-    try {
-      const res = await fetch(`${apiBase()}/session/logout`, {
-        method: "POST",
-        headers: headers(),
-      });
-      if (!res.ok) {
-        /* best-effort: 502 u otro fallo no debe bloquear cierre local (misma idea que logoutSecurity) */
-        void res.text();
-      }
-    } catch {
-      /* red / backend caído: seguimos y limpiamos sesión en el cliente */
-    }
-  }
   try {
     await logoutSecurity();
   } catch {
@@ -1410,20 +1760,22 @@ export async function logoutSession(): Promise<void> {
   clearAuthSession();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Chat — mapped to soporte-rag-mt /api/v1/tareas/{codigoTarea}/chat
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function vectorChat(question: string): Promise<VectorChatResponse> {
-  const res = await fetch(`${apiBase()}/vector/chat`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ question }),
-  });
-  return parseJson<VectorChatResponse>(res);
+  // TODO: vectorChat requiere un taskId; por ahora lanza error si no se usa streamVectorChat.
+  void question;
+  throw new Error("Not implemented: vectorChat sin taskId — usar streamVectorChat con options.taskId.");
 }
 
 const REST_RAG_DELTA_CHUNK = 480;
 
 /**
- * Chat RAG vía POST {@code /vector/chat/rag-turn}. El historial se alinea con HU / {@code conversationId} / tarea / célula.
- * La respuesta llega completa; el cliente trocea el texto para mantener la sensación de escritura progresiva.
+ * Chat RAG vía POST /api/v1/tareas/{codigoTarea}/chat.
+ * El historial se alinea con HU / conversationId / tarea / célula.
+ * Streaming real via SSE (text/event-stream): el backend emite tokens progresivamente.
  */
 export async function streamVectorChat(
   question: string,
@@ -1434,66 +1786,119 @@ export async function streamVectorChat(
     onProposals?: (proposals: WorkAreaFileProposal[]) => void;
   },
   /** Opcional: código HU, id de tarea (hilo principal en servidor), conversación explícita, célula. */
-  options?: { taskHuCode?: string; conversationId?: string; taskId?: number; cellName?: string },
+  options?: { taskHuCode?: string; conversationId?: string; taskId?: string; cellName?: string },
 ): Promise<void> {
   const uid = getUserId();
   if (!uid) {
     return Promise.reject(new Error("Falta el identificador de usuario (DocViz)."));
   }
-
-  const body: Record<string, unknown> = { question };
-  if (options?.taskHuCode?.trim()) body.taskHuCode = options.taskHuCode.trim();
-  if (options?.conversationId?.trim()) body.conversationId = options.conversationId.trim();
-  if (options?.taskId != null && Number.isFinite(options.taskId) && options.taskId > 0) {
-    body.taskId = Math.trunc(options.taskId);
+  if (!options?.taskId) {
+    return Promise.reject(new Error("Se requiere taskId para el chat con soporte-rag-mt."));
   }
-  if (options?.cellName?.trim()) body.cellName = options.cellName.trim();
 
-  const res = await fetch(`${apiBase()}/vector/chat/rag-turn`, {
+  const trimmedQuestion = question?.trim() ?? "";
+  if (!trimmedQuestion) {
+    return Promise.reject(new Error("El mensaje no puede estar vacío."));
+  }
+
+  handlers.onStart([]);
+
+  // SSE streaming via POST /chat/stream (text/event-stream)
+  const res = await fetch(`${apiBase()}/api/v1/tareas/${options.taskId}/chat/stream`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify(body),
+    body: JSON.stringify({ mensaje: trimmedQuestion }),
   });
-  const data = await parseJson<RagChatTurnResponse>(res);
-  handlers.onStart(data.sources ?? []);
-  const ans = data.answer ?? "";
-  for (let i = 0; i < ans.length; i += REST_RAG_DELTA_CHUNK) {
-    handlers.onDelta(ans.slice(i, i + REST_RAG_DELTA_CHUNK));
+
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || res.statusText;
+    try {
+      const j = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+      msg = j.detail ?? j.message ?? j.error ?? msg;
+    } catch { /* ignore */ }
+    throw new Error(msg);
   }
-  if (data.proposals?.length && handlers.onProposals) {
-    handlers.onProposals(data.proposals);
+
+  if (!res.body) {
+    throw new Error("El servidor no devolvió un stream.");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE format: "data:token\n\n" — parse individual data lines
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // keep incomplete line in buffer
+
+    for (const line of lines) {
+      if (line.startsWith("data:")) {
+        const token = line.slice(5); // strip "data:" prefix
+        if (token.trim()) {
+          handlers.onDelta(token);
+        }
+      }
+    }
+  }
+
+  // Process any remaining buffer
+  if (buffer.startsWith("data:")) {
+    const token = buffer.slice(5);
+    if (token.trim()) {
+      handlers.onDelta(token);
+    }
   }
 }
 
 export type FetchChatHistoryParams = {
   conversationId?: string;
   /** Con huCode: el servidor devuelve el hilo con menor N (principal). */
-  taskId?: number;
+  taskId?: string;
   huCode?: string;
   /** Alineado con Firestore {@code usuario_celula_hu_taskId_N}. */
   cellName?: string;
 };
 
-/** Historial del chat en Firestore (mismo userId que X-DocViz-User). */
+/** Historial del chat — recupera el historial de chat de la tarea desde soporte-rag-mt. */
 export async function fetchChatHistory(
   limit = 40,
   params?: string | FetchChatHistoryParams,
 ): Promise<{ entries: ChatHistoryEntry[]; resolvedConversationId?: string }> {
-  const lim = encodeURIComponent(String(Math.min(Math.max(1, limit), 100)));
-  let url = `${apiBase()}/vector/chat/history?limit=${lim}`;
-  const p: FetchChatHistoryParams | undefined = typeof params === "string" ? { conversationId: params } : params;
-  if (p?.taskId != null && p.taskId > 0 && p.huCode?.trim()) {
-    url += `&taskId=${encodeURIComponent(String(p.taskId))}&huCode=${encodeURIComponent(p.huCode.trim())}`;
-    if (p.cellName?.trim()) {
-      url += `&cellName=${encodeURIComponent(p.cellName.trim())}`;
+  void limit;
+  if (typeof params === "object" && params?.taskId) {
+    try {
+      const res = await fetch(`${apiBase()}/api/v1/tareas/${params.taskId}`, { headers: headers() });
+      if (res.ok) {
+        const task = await parseJson<any>(res);
+        const entries: ChatHistoryEntry[] = (task.msgChat || []).map((msg: any, index: number) => ({
+          id: `${params.taskId}-${index}`,
+          question: msg.textoEntrada,
+          answer: msg.textoRespuesta,
+          sources: [],
+          repoLabel: "",
+          createdAt: msg.horaRespuesta || null,
+        }));
+        return { entries, resolvedConversationId: params.taskId };
+      }
+    } catch (e) {
+      console.error("Error fetching chat history from backend", e);
     }
-  } else if (p?.conversationId?.trim()) {
-    url += `&conversationId=${encodeURIComponent(p.conversationId.trim())}`;
   }
-  const res = await fetch(url, {
-    headers: headers(),
-  });
-  const resolvedConversationId = res.headers.get("X-DocViz-Resolved-Conversation-Id")?.trim() || undefined;
-  const entries = await parseJson<ChatHistoryEntry[]>(res);
-  return { entries, resolvedConversationId };
+  return { entries: [], resolvedConversationId: undefined };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Health check — mapped to soporte-rag-mt /api/v1/infraestructura/salud
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function healthCheck(): Promise<Record<string, unknown>> {
+  const res = await fetch(`${apiBase()}/api/v1/infraestructura/salud`, { headers: headers() });
+  return parseJson<Record<string, unknown>>(res);
 }

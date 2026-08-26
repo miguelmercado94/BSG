@@ -25,15 +25,15 @@ export function buildChatConversationId(
   opts?: {
     huCode?: string | null;
     threadIndex?: number;
-    taskId?: number | null;
+    taskId?: string | number | null;
     cellName?: string | null;
   },
 ): string {
   const u = seg(userId);
   const t = opts?.huCode?.trim() ? seg(opts.huCode.trim()) : "default";
   const c = opts?.cellName?.trim() ? seg(opts.cellName.trim()) : null;
-  if (opts?.taskId != null && Number.isFinite(opts.taskId)) {
-    const tid = String(Math.trunc(opts.taskId));
+  if (opts?.taskId != null && String(opts.taskId).trim() !== "") {
+    const tid = seg(String(opts.taskId));
     const n = String(opts?.threadIndex ?? 0);
     if (c) {
       return `${u}_${c}_${t}_${tid}_${n}`;
@@ -53,7 +53,7 @@ export function resolveChatConversationId(
   opts?: {
     /** Valor de {@code docviz_task.chat_conversation_id}; fuente de verdad. */
     persistedConversationId?: string | null;
-    taskId?: number | null;
+    taskId?: string | number | null;
     cellName?: string | null;
   },
 ): string {

@@ -16,10 +16,10 @@ public class SoporteMapperDto {
         return new DocumentoSoporte(
                 null, // id
                 request.getCodigo(),
-                repositorio.getNombre(),
+                repositorio.getUrl(),
                 request.getNombre(),
                 request.getDescripcion(),
-                repositorio.getNombre(), // Usamos el nombre del repo como namespace por defecto
+                repositorio.getNamespace() != null ? repositorio.getNamespace() : repositorio.getUrl(),
                 s3Path, // La ruta completa calculada en el caso de uso
                 RolBucketS3.WORKAREA,
                 false, // No indexado al crear

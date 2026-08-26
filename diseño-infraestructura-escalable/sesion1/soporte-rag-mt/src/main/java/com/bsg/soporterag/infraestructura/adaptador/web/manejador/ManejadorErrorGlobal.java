@@ -1,6 +1,8 @@
 package com.bsg.soporterag.infraestructura.adaptador.web.manejador;
 
 import com.bsg.soporterag.dominio.excepcion.CelulaNoEncontradaException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -10,6 +12,8 @@ import reactor.core.publisher.Mono;
 
 @RestControllerAdvice
 public class ManejadorErrorGlobal {
+
+    private static final Logger log = LoggerFactory.getLogger(ManejadorErrorGlobal.class);
 
     @ExceptionHandler(WebExchangeBindException.class)
     public Mono<ProblemDetail> handleValidationExceptions(WebExchangeBindException ex) {
@@ -45,10 +49,10 @@ public class ManejadorErrorGlobal {
 
     @ExceptionHandler(Exception.class)
     public Mono<ProblemDetail> handleGenericException(Exception ex) {
+        log.error("Error no manejado: {}", ex.getMessage(), ex);
         ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         detail.setTitle("Error interno del servidor");
-        detail.setDetail("Ocurrió un error inesperado. Por favor, contacte al administrador.");
-        // Aquí podrías loggear el ex.getMessage() o el stack trace completo para depuración
+        detail.setDetail(ex.getMessage() != null ? ex.getMessage() : "Error inesperado");
         return Mono.just(detail);
     }
 }

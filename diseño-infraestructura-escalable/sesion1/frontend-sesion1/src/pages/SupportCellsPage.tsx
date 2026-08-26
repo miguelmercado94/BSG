@@ -70,7 +70,9 @@ export function SupportCellsPage() {
               className="repo-type-card repo-type-card--active"
               onClick={() => navigate(`/support/cells/${c.id}/tasks`)}
             >
-              <span className="repo-type-card__name">{c.name}</span>
+              <span className="repo-type-card__name">
+                {c.name} <span className="muted small" style={{ fontWeight: "normal" }}>({c.id})</span>
+              </span>
               <span className="repo-type-card__hint muted small">
                 {c.description ? c.description.slice(0, 48) : "Ver tareas"}
               </span>

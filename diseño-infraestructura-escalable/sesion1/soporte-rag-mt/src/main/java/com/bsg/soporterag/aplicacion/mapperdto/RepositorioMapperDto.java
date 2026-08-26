@@ -92,6 +92,10 @@ public class RepositorioMapperDto {
         dto.setDescripcion(repositorio.getDescripcion());
         dto.setIndexado(repositorio.isIndexado());
         dto.setUrlFolderS3Workarea(repositorio.getUrlFolderS3Workarea());
+        dto.setFilesPath(repositorio.getFilesPath());
+        dto.setFolderPath(repositorio.getFolderPath());
+        dto.setVectorNamespace(repositorio.getNamespace());
+        dto.setTags(repositorio.getTags() != null ? repositorio.getTags() : java.util.List.of());
         return dto;
     }
 }

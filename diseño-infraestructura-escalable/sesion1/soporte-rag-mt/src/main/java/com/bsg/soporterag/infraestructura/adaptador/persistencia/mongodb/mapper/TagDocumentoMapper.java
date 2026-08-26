@@ -17,6 +17,7 @@ public class TagDocumentoMapper {
             return null;
         }
         Tag dominio = new Tag();
+        dominio.setId(documento.getId());
         dominio.setTag(documento.getTag());
         dominio.setDescripcionTag(documento.getDescripcionTag());
         dominio.setHabilitado(documento.isHabilitado());
@@ -37,6 +38,7 @@ public class TagDocumentoMapper {
             return null;
         }
         TagDocumento documento = new TagDocumento();
+        documento.setId(dominio.getId());
         documento.setTag(dominio.getTag());
         documento.setDescripcionTag(dominio.getDescripcionTag());
         documento.setHabilitado(dominio.isHabilitado());

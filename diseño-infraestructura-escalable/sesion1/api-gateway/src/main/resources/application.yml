@@ -1,0 +1,78 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      # Rutas explicitas hacia los micros
+      routes:
+        # soporte-rag-mt (core): /docviz/**
+        - id: soporte-rag-mt
+          uri: ${SOPORTE_RAG_URI:lb://soporte-rag-mt}
+          predicates:
+            - Path=/docviz/**
+
+      # Discovery automático como fallback (service-id en path)
+      discovery:
+        locator:
+          enabled: ${GATEWAY_DISCOVERY_LOCATOR:false}
+          lower-case-service-id: true
+
+      # CORS global
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins:
+              - "http://localhost:3000"
+              - "http://localhost:5173"
+              - "http://127.0.0.1:5173"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - PATCH
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+
+# =========================================================================
+# Eureka Client — deshabilitado por defecto (local sin infra)
+# =========================================================================
+eureka:
+  client:
+    enabled: ${EUREKA_ENABLED:false}
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+    register-with-eureka: ${EUREKA_ENABLED:false}
+    fetch-registry: ${EUREKA_ENABLED:false}
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${server.port}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+    gateway:
+      enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  level:
+    root: ${LOG_LEVEL_ROOT:INFO}
+    org.springframework.cloud.gateway: ${LOG_LEVEL_GATEWAY:INFO}

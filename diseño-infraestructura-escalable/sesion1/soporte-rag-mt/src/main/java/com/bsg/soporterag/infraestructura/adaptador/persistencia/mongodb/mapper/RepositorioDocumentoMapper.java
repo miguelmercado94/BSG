@@ -40,11 +40,15 @@ public class RepositorioDocumentoMapper {
         dominio.setRamaPrincipal(documento.getRamaPrincipal());
         dominio.setUltimoCommit(documento.getUltimoCommit());
         dominio.setUrlFolderS3Workarea(documento.getUrlFolderS3Workarea());
+        if (documento.getNamespace() != null) {
+            dominio.setNamespace(documento.getNamespace());
+        } else {
+            String base = documento.getNombreRepo().replaceAll("[^a-zA-Z0-9._-]", "_").replaceAll("_+", "_");
+            dominio.setNamespace(base + "-" + java.util.UUID.randomUUID().toString());
+        }
         
         if (documento.getTags() != null) {
-            dominio.setTags(documento.getTags().stream()
-                    .map(tagMapper::aDominio)
-                    .collect(Collectors.toList()));
+            dominio.setTags(new ArrayList<>(documento.getTags()));
         } else {
             dominio.setTags(Collections.emptyList());
         }
@@ -72,11 +76,10 @@ public class RepositorioDocumentoMapper {
         documento.setRamaPrincipal(dominio.getRamaPrincipal());
         documento.setUltimoCommit(dominio.getUltimoCommit());
         documento.setUrlFolderS3Workarea(dominio.getUrlFolderS3Workarea());
+        documento.setNamespace(dominio.getNamespace());
 
         if (dominio.getTags() != null) {
-            documento.setTags(dominio.getTags().stream()
-                    .map(tagMapper::aDocumento)
-                    .collect(Collectors.toList()));
+            documento.setTags(new ArrayList<>(dominio.getTags()));
         } else {
             documento.setTags(Collections.emptyList());
         }

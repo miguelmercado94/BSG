@@ -10,8 +10,9 @@ export function AdminCellsListPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deleteModal, setDeleteModal] = useState<
-    null | { cellId: number; name: string; taskCount: number | null; loading: boolean }
+    null | { cellId: string; name: string; taskCount: number | null; loading: boolean }
   >(null);
+  const [gearOpen, setGearOpen] = useState(false);
 
   useEffect(() => {
     if (!getUserId().trim()) {
@@ -40,7 +41,7 @@ export function AdminCellsListPage() {
     void reload();
   }, []);
 
-  async function openDeleteModal(id: number, name: string) {
+  async function openDeleteModal(id: string, name: string) {
     setDeleteModal({ cellId: id, name, taskCount: null, loading: true });
     setErr(null);
     try {
@@ -87,17 +88,54 @@ export function AdminCellsListPage() {
           Gestiona células y sus repositorios de contexto. Usa <strong>+</strong> para crear una célula o edita una
           existente para añadir repos e indexarlos.
         </p>
-        {hasCells && (
+        {/* Gear settings button (top-right of header) */}
+        <div style={{ position: "absolute", top: 0, right: 0 }}>
           <button
             type="button"
             className="admin-cells-list__fab-small"
-            onClick={() => navigate("/admin/cells/new")}
-            title="Agrega nueva célula"
-            aria-label="Agrega nueva célula"
+            onClick={() => setGearOpen(!gearOpen)}
+            title="Configuración"
+            aria-label="Configuración"
+            style={{ background: "transparent", border: "none", color: "#9aa0a6", cursor: "pointer", padding: "0.25rem" }}
           >
-            +
+            <svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.61 3.61 0 0 1 8.4 12 3.61 3.61 0 0 1 12 8.4a3.61 3.61 0 0 1 3.6 3.6 3.61 3.61 0 0 1-3.6 3.6z"/></svg>
           </button>
-        )}
+          {gearOpen && (
+            <div
+              style={{
+                position: "absolute",
+                top: "2rem",
+                right: 0,
+                background: "#2d2d30",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: "6px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+                zIndex: 100,
+                minWidth: "160px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => { setGearOpen(false); navigate("/admin/tags"); }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "0.6rem 1rem",
+                  background: "transparent",
+                  border: "none",
+                  color: "#e8eaed",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                }}
+                onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+                onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+              >
+                Configurar Tags
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       {err && (
@@ -107,7 +145,21 @@ export function AdminCellsListPage() {
       )}
 
       <section className="card admin-cells-list__card">
-        <h2 className="h3">Células existentes</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 className="h3">Células existentes</h2>
+          {hasCells && (
+            <button
+              type="button"
+              className="admin-cells-list__fab-small"
+              onClick={() => navigate("/admin/cells/new")}
+              title="Agrega nueva célula"
+              aria-label="Agrega nueva célula"
+              style={{ position: "static" }}
+            >
+              +
+            </button>
+          )}
+        </div>
         {loading ? (
           <p className="muted small" role="status">
             Cargando…
@@ -128,7 +180,9 @@ export function AdminCellsListPage() {
           <ul className="admin-cells-list__ul">
             {cells.map((c) => (
               <li key={c.id} className="admin-cells-list__row">
-                <span className="admin-cells-list__name">{c.name}</span>
+                <span className="admin-cells-list__name">
+                  {c.name} <span className="muted small" style={{ fontWeight: "normal" }}>({c.id})</span>
+                </span>
                 <div className="admin-cells-list__actions">
                   <button
                     type="button"

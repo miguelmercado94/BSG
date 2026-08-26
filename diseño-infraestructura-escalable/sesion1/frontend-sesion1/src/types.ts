@@ -69,7 +69,7 @@ export interface IngestProgressEvent {
   skipped?: string[];
   error?: string;
   /** Metadatos finales en admin (repos/stream) */
-  cellRepoId?: number;
+  cellRepoId?: string;
   displayName?: string;
   linkedWithoutReindex?: boolean;
 }
@@ -217,23 +217,20 @@ export type SupportUploadUiState =
 
 /** Dominio: célula (área) configurada por el administrador. */
 export interface CellResponse {
-  id: number;
+  id: string;
   name: string;
   description: string | null;
   createdAt: string | null;
   createdBy: string | null;
 }
 
-/** GET .../delete-impact antes de borrar célula o repo. */
 export interface DeleteImpactResponse {
   taskCount: number;
 }
 
-/** Repositorio asociado a una célula (repos de la empresa). */
 export interface CellRepoResponse {
-  id: number;
-  /** Null mientras el repo está indexado pero aún no asignado a una célula (pendiente de “Guardar”). */
-  cellId: number | null;
+  id: string;
+  cellId: string | null;
   displayName: string;
   repositoryUrl: string;
   connectionMode: GitConnectionMode;
@@ -249,17 +246,18 @@ export interface CellRepoResponse {
   lastIngestFiles: number | null;
   lastIngestChunks: number | null;
   lastIngestSkipped: string[] | null;
-  /** True si se enlazó a un repo ya indexado en otra célula (sin reindexar). */
   linkedWithoutReindex?: boolean;
+  indexado?: boolean;
+  ramaPrincipal?: string;
+  filesPath?: string[];
+  folderPath?: string[];
 }
 
-/** POST /admin/cells/pending/index/begin */
 export interface PendingIndexBeginResponse {
   linkedWithoutReindex: boolean;
   repo: CellRepoResponse;
 }
 
-/** POST /admin/cells/pending/{repoId}/ingest-one */
 export interface SinglePathIngestResultDto {
   indexed: boolean;
   skipped: boolean;
@@ -269,47 +267,43 @@ export interface SinglePathIngestResultDto {
   errorMessage: string | null;
 }
 
-/** GET /admin/cells/hints/repo-url */
 export interface CellRepoUrlHint {
   displayName: string;
   vectorNamespace: string;
   reusedFromExisting: boolean;
-  /** Rama por defecto del remoto (main/master/…) o HEAD local; ausente si no se detectó. */
   defaultBranch?: string | null;
 }
 
 export interface TaskResponse {
-  id: number;
+  id: string;
   userId: string;
   huCode: string;
-  cellRepoId: number;
+  cellRepoId: string;
   enunciado: string;
   status: string;
   createdAt: string | null;
   continuedAt: string | null;
-  /** Id de hilo RAG/Firestore; persistido en PostgreSQL (`docviz_task.chat_conversation_id`). */
   chatConversationId?: string | null;
 }
 
 export interface TaskCreateRequest {
   huCode: string;
-  cellRepoId: number;
+  cellRepoId: string;
+  cellId: string;
   enunciado: string;
 }
 
 export interface TaskContinueResponse {
-  taskId: number;
+  taskId: string;
   huCode: string;
-  cellRepoId: number;
+  cellRepoId: string;
   gitConnect: GitConnectRequest;
   initialChatPrompt: string;
   vectorNamespaceHint: string;
-  /** Nombre de célula desde el API (evita depender del estado asíncrono en la página de tareas). */
   cellName?: string | null;
   chatConversationId?: string | null;
 }
 
-/** POST /vector/work-area/restore-s3 */
 export interface RestoredWorkAreaProposal {
   id: string;
   fileName: string;
@@ -325,17 +319,14 @@ export interface TaskArtifactRestoreResponse {
   proposals: RestoredWorkAreaProposal[];
 }
 
-/** GET /support/markdown/objects — bucket, clave, nombre y URL presignada. */
 export interface SupportMarkdownObjectDto {
   bucket: string;
   objectKey: string;
   fileName: string;
   url: string;
-  /** Etiqueta breve para listados (p. ej. HU); opcional si el API no la envía. */
   displayLabel?: string | null;
 }
 
-/** GET /vector/work-area/s3-objects?kind=… o GET /vector/work-area/s3-artifacts (listado unificado). */
 export interface WorkAreaS3ObjectDto {
   bucket: string;
   objectKey: string;
@@ -344,6 +335,7 @@ export interface WorkAreaS3ObjectDto {
 }
 
 export interface CellRequestBody {
+  code?: string;
   name: string;
   description?: string;
 }

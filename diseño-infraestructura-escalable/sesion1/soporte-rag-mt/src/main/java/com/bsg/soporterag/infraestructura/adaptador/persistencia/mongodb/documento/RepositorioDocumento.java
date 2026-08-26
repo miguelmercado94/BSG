@@ -58,6 +58,9 @@ public class RepositorioDocumento {
     @Field("url_folder_s3_workarea")
     private String urlFolderS3Workarea;
 
+    @Field("namespace")
+    private String namespace;
+
     @Field("tags")
     private List<String> tags = new ArrayList<>(); // Lista de nombres de tags (referencia)
 }

@@ -42,8 +42,6 @@ variable "openai_api_key" {
 }
 
 locals {
-  back_security_version = chomp(trimspace(file("${path.module}/../sesion1/back-security-sesion1/version.txt")))
-  back_security_image   = "mmercado94/back-security-sesion1:${local.back_security_version}"
   backend_version       = chomp(trimspace(file("${path.module}/../sesion1/backend-sesion1/version.txt")))
   backend_image         = "mmercado94/backend-sesion1:${local.backend_version}"
   frontend_version      = chomp(trimspace(file("${path.module}/../sesion1/frontend-sesion1/version.txt")))
@@ -322,94 +320,7 @@ resource "aws_iam_role_policy" "dynamodb_task_policy" {
   })
 }
 
-resource "aws_cloudwatch_log_group" "back_security_logs" {
-  name              = "/ecs/bsg-back-security"
-  retention_in_days = 7
-}
 
-resource "aws_security_group" "ecs_security_sg" {
-  name   = "ecs-back-security-sg"
-  vpc_id = data.aws_vpc.mi_vpc.id
-
-  ingress {
-    from_port   = 8081
-    to_port     = 8081
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_security_group_rule" "rds_from_ecs" {
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.rds_sg.id
-  source_security_group_id = aws_security_group.ecs_security_sg.id
-}
-
-resource "aws_security_group_rule" "redis_from_ecs" {
-  type                     = "ingress"
-  from_port                = 6379
-  to_port                  = 6379
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.redis_sg.id
-  source_security_group_id = aws_security_group.ecs_security_sg.id
-}
-
-# =========================================================
-# 12b. NLB interno (TCP 8081) — integración privada HTTP API
-# API Gateway HTTP API + VPC Link con solo ARN de Cloud Map suele responder 500 aunque el task
-# funcione por IP; AWS documenta integración estable contra ARN de listener de NLB/ALB.
-# =========================================================
-resource "aws_lb" "back_security_nlb" {
-  name               = "bsg-back-sec-nlb"
-  internal           = true
-  load_balancer_type = "network"
-  subnets            = data.aws_subnets.mis_subredes.ids
-}
-
-resource "aws_lb_target_group" "back_security_nlb_tg" {
-  name        = "bsg-sec-nlb-tg"
-  port        = 8081
-  protocol    = "TCP"
-  vpc_id      = data.aws_vpc.mi_vpc.id
-  target_type = "ip"
-
-  health_check {
-    enabled             = true
-    protocol            = "HTTP"
-    path                = "/security-auth/actuator/health"
-    port                = "traffic-port"
-    matcher             = "200"
-    interval            = 30
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
-}
-
-resource "aws_lb_listener" "back_security_nlb_listener" {
-  load_balancer_arn = aws_lb.back_security_nlb.arn
-  port              = 8081
-  protocol          = "TCP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.back_security_nlb_tg.arn
-  }
-}
-
-output "back_security_nlb_dns" {
-  value       = aws_lb.back_security_nlb.dns_name
-  description = "DNS interno del NLB back-security (desde VPC; API Gateway VPC Link usa el listener ARN)"
-}
 
 # =========================================================
 # 12c. NLB interno DocViz backend (TCP 8080) — API Gateway → listener ARN (no Cloud Map directo)
@@ -458,95 +369,6 @@ output "backend_docviz_nlb_dns" {
   description = "DNS interno NLB DocViz backend (integración API GW = ARN del listener)"
 }
 
-# =========================================================
-# 13. ECS Task & Service — back-security-sesion1
-# =========================================================
-resource "aws_service_discovery_service" "back_security_sd" {
-  name = "security"
-  dns_config {
-    namespace_id   = aws_service_discovery_private_dns_namespace.bsg_namespace.id
-    routing_policy = "MULTIVALUE"
-    dns_records {
-      ttl  = 60
-      type = "A"
-    }
-  }
-}
-
-resource "aws_ecs_task_definition" "back_security_task" {
-  family                   = "bsg-back-security"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"
-  memory                   = "512"
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-  container_definitions = jsonencode([{
-    name         = "back-security"
-    image        = local.back_security_image
-    essential    = true
-    portMappings = [{ containerPort = 8081, hostPort = 8081, protocol = "tcp" }]
-    environment = [
-      { name = "SPRING_PROFILES_ACTIVE", value = "pdn" },
-      { name = "SPRING_R2DBC_URL", value = "r2dbc:postgresql://${aws_db_instance.postgres_bsg.endpoint}/bsg_security?sslMode=REQUIRE" },
-      { name = "SPRING_R2DBC_USERNAME", value = "bsg_admin" },
-      { name = "SPRING_R2DBC_PASSWORD", value = "PasswordSeguro123" },
-      { name = "BSG_SECURITY_AWS_DYNAMODB_ENABLED", value = "true" },
-      { name = "BSG_SECURITY_AWS_DYNAMODB_REGION", value = "us-east-1" },
-      { name = "BSG_SECURITY_AWS_DYNAMODB_REVOKED_TOKENS_TABLE", value = aws_dynamodb_table.bsg_revoked_tokens.name },
-      { name = "SPRING_DATA_REDIS_HOST", value = aws_elasticache_cluster.redis_bsg.cache_nodes[0].address },
-      { name = "SPRING_DATA_REDIS_PORT", value = "6379" }
-    ]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.back_security_logs.name
-        "awslogs-region"        = "us-east-1"
-        "awslogs-stream-prefix" = "ecs"
-      }
-    }
-    healthCheck = {
-      command     = ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/security-auth/actuator/health >/dev/null || exit 1"]
-      interval    = 15
-      timeout     = 5
-      retries     = 4
-      startPeriod = 150
-    }
-  }])
-}
-
-resource "aws_ecs_service" "back_security_service" {
-  name             = "bsg-back-security-service"
-  cluster          = aws_ecs_cluster.bsg_cluster.id
-  task_definition  = aws_ecs_task_definition.back_security_task.arn
-  launch_type      = "FARGATE"
-  desired_count    = 1
-  platform_version = "LATEST"
-
-  network_configuration {
-    subnets          = data.aws_subnets.mis_subredes.ids
-    security_groups  = [aws_security_group.ecs_security_sg.id]
-    assign_public_ip = true
-  }
-
-  service_registries {
-    registry_arn   = aws_service_discovery_service.back_security_sd.arn
-    container_name = "back-security"
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.back_security_nlb_tg.arn
-    container_name   = "back-security"
-    container_port   = 8081
-  }
-
-  depends_on = [aws_lb_listener.back_security_nlb_listener]
-
-  lifecycle {
-    ignore_changes = [task_definition]
-  }
-}
 
 # =========================================================
 # 13b. DocViz backend-sesion1 — S3 + IAM, SG, Cloud Map, ECS (Fargate 4 vCPU / 16 GiB, core LLM)
@@ -724,28 +546,12 @@ resource "aws_ecs_service" "backend_service" {
 # =========================================================
 resource "aws_apigatewayv2_vpc_link" "bsg_vpc_link" {
   name               = "bsg-vpc-link"
-  security_group_ids = [aws_security_group.ecs_security_sg.id, aws_security_group.ecs_backend_sg.id]
+  security_group_ids = [aws_security_group.ecs_backend_sg.id]
   subnet_ids         = data.aws_subnets.mis_subredes.ids
-}
-
-resource "aws_apigatewayv2_integration" "security_integration" {
-  api_id             = aws_apigatewayv2_api.bsg_gateway.id
-  integration_type   = "HTTP_PROXY"
-  integration_uri    = aws_lb_listener.back_security_nlb_listener.arn
-  integration_method = "ANY"
-  connection_type    = "VPC_LINK"
-  connection_id      = aws_apigatewayv2_vpc_link.bsg_vpc_link.id
 }
 
 locals {
   api_gateway_proxy_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
-}
-
-resource "aws_apigatewayv2_route" "security_route" {
-  for_each  = toset(local.api_gateway_proxy_methods)
-  api_id    = aws_apigatewayv2_api.bsg_gateway.id
-  route_key = "${each.key} /security-auth/{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.security_integration.id}"
 }
 
 resource "aws_apigatewayv2_integration" "backend_integration" {

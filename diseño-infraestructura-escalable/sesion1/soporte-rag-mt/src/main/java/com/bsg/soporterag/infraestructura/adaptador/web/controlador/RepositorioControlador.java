@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @RestController
@@ -117,8 +118,8 @@ public class RepositorioControlador {
                     content = @Content(schema = @Schema(implementation = IndexacionCompletaResponseDto.class))),
             @ApiResponse(responseCode = "404", description = "Repositorio no encontrado", content = @Content)
     })
-    @PostMapping("/indexar")
-    public Mono<IndexacionCompletaResponseDto> indexarRepositorio(
+    @PostMapping(value = "/indexar", produces = org.springframework.http.MediaType.APPLICATION_NDJSON_VALUE)
+    public reactor.core.publisher.Flux<IndexacionArchivoResponseDto> indexarRepositorio(
             @Parameter(description = "URL del repositorio a indexar", required = true)
             @RequestParam("url") String urlRepo) {
         return gestionarRepositorioCasoUso.indexarRepositorioCompleto(urlRepo);
@@ -139,5 +140,66 @@ public class RepositorioControlador {
             @Parameter(description = "Datos del archivo a indexar", required = true)
             @RequestBody IndexarArchivoRequestDto request) {
         return gestionarRepositorioCasoUso.indexarArchivo(request);
+    }
+
+    @Operation(
+            summary = "Detectar rama principal",
+            description = "Consulta el remoto Git para detectar la rama principal (main/master/develop) sin clonar el repositorio."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Rama principal detectada"),
+            @ApiResponse(responseCode = "400", description = "URL invalida o repositorio no accesible", content = @Content)
+    })
+    @GetMapping("/rama-principal")
+    public Mono<java.util.Map<String, String>> detectarRamaPrincipal(
+            @Parameter(description = "URL del repositorio Git", required = true, example = "https://github.com/mi-org/mi-repo.git")
+            @RequestParam("url") String urlRepo) {
+        return gestionarRepositorioCasoUso.detectarRamaPrincipal(urlRepo)
+                .map(rama -> java.util.Map.of("ramaPrincipal", rama));
+    }
+
+    @Operation(
+            summary = "Listar ramas del repositorio",
+            description = "Consulta el remoto Git para listar todas las ramas disponibles. La primera de la lista es la rama principal."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Ramas listadas"),
+            @ApiResponse(responseCode = "400", description = "URL invalida o repositorio no accesible", content = @Content)
+    })
+    @GetMapping("/ramas")
+    public Flux<java.util.Map<String, String>> listarRamas(
+            @Parameter(description = "URL del repositorio Git", required = true)
+            @RequestParam("url") String urlRepo) {
+        // Primera rama es la principal, luego el resto ordenadas
+        return gestionarRepositorioCasoUso.detectarRamaPrincipal(urlRepo)
+                .flatMapMany(principal ->
+                    gestionarRepositorioCasoUso.listarRamas(urlRepo)
+                        .map(rama -> java.util.Map.of("nombre", rama.nombre(), "commit", rama.ultimoCommit() != null ? rama.ultimoCommit().hash() : ""))
+                        .sort((a, b) -> {
+                            if (a.get("nombre").equals(principal)) return -1;
+                            if (b.get("nombre").equals(principal)) return 1;
+                            return a.get("nombre").compareTo(b.get("nombre"));
+                        })
+                );
+    }
+
+    @Operation(
+            summary = "Obtener contenido de un archivo",
+            description = "Extrae el contenido de un archivo del repositorio Git en la rama especificada."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Contenido del archivo"),
+            @ApiResponse(responseCode = "404", description = "Archivo o repositorio no encontrado", content = @Content)
+    })
+    @GetMapping("/archivo")
+    public Mono<java.util.Map<String, String>> obtenerContenidoArchivo(
+            @Parameter(description = "URL del repositorio Git", required = true)
+            @RequestParam("url") String urlRepo,
+            @Parameter(description = "Rama del repositorio", required = true)
+            @RequestParam("rama") String rama,
+            @Parameter(description = "Ruta relativa del archivo", required = true)
+            @RequestParam("filePath") String filePath) {
+        return gestionarRepositorioCasoUso.obtenerContenidoArchivo(urlRepo, rama, filePath)
+                .map(contenido -> java.util.Map.of("path", filePath, "content", contenido, "encoding", "utf-8"));
     }
 }

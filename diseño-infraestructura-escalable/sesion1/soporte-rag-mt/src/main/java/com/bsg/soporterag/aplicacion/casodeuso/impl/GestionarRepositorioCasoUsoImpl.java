@@ -83,37 +83,57 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
         return validacionCelula
                 .then(tagsValidadosMono)
-                .flatMap(tagsValidados -> {
-                    Repositorio repositorio = repositorioMapperDto.aDominioDesdeRequest(request, url);
-                    repositorio.setTags(tagsValidados);
-                    log.info("Alta repositorio iniciada | nombre={} url={} celula={} tagsValidados={}", 
-                            repositorio.getNombre(), url, request.getCodigoCelula(), tagsValidados);
-                    
-                    return servicioJGit.resolverRama(url, repositorio.getRamaPrincipal())
-                            .doOnSubscribe(s -> log.info("Git: conectando e inventariando remoto | url={}", url))
-                            .flatMap(rama -> {
-                                repositorio.setRamaPrincipal(rama);
-                                return Mono.zip(
-                                        servicioJGit.obtenerUltimoCommit(url, rama),
-                                        servicioJGit.extraerArbolRutas(url, rama));
+                .flatMap(tagsValidados -> 
+                    repositorioServicio.obtenerRepo(url)
+                            .flatMap(repoExistente -> {
+                                log.info("Repositorio existente encontrado | url={} nombre={}", url, repoExistente.getNombre());
+                                if (repoExistente.getNamespace() == null) {
+                                    String base = repoExistente.getNombre().replaceAll("[^a-zA-Z0-9._-]", "_").replaceAll("_+", "_");
+                                    repoExistente.setNamespace(base + "-" + java.util.UUID.randomUUID().toString());
+                                    return repositorioServicio.actualizarRepo(repoExistente, url)
+                                            .flatMap(repoActualizado -> celulaServicio.asociarRepositorio(request.getCodigoCelula(), repoActualizado.getNombre())
+                                                    .thenReturn(repoActualizado));
+                                }
+                                return celulaServicio.asociarRepositorio(request.getCodigoCelula(), repoExistente.getNombre())
+                                        .thenReturn(repoExistente);
                             })
-                            .map(tuple -> {
-                                repositorio.setUltimoCommit(tuple.getT1());
-                                repositorioMapperDto.aplicarArbolRutas(repositorio, tuple.getT2());
-                                repositorio.setFechaActualizacion(Instant.now());
-                                return repositorio;
+                            .onErrorResume(IllegalArgumentException.class, e -> {
+                                Repositorio repositorio = repositorioMapperDto.aDominioDesdeRequest(request, url);
+                                repositorio.setTags(tagsValidados);
+                                
+                                String base = request.getNombre().replaceAll("[^a-zA-Z0-9._-]", "_").replaceAll("_+", "_");
+                                String ns = base + "-" + java.util.UUID.randomUUID().toString();
+                                repositorio.setNamespace(ns);
+
+                                log.info("Alta repositorio iniciada | nombre={} url={} celula={} tagsValidados={}", 
+                                        repositorio.getNombre(), url, request.getCodigoCelula(), tagsValidados);
+                                
+                                return servicioJGit.resolverRama(url, repositorio.getRamaPrincipal())
+                                        .doOnSubscribe(s -> log.info("Git: conectando e inventariando remoto | url={}", url))
+                                        .flatMap(rama -> {
+                                            repositorio.setRamaPrincipal(rama);
+                                            return Mono.zip(
+                                                    servicioJGit.obtenerUltimoCommit(url, rama),
+                                                    servicioJGit.extraerArbolRutas(url, rama));
+                                        })
+                                        .map(tuple -> {
+                                            repositorio.setUltimoCommit(tuple.getT1());
+                                            repositorioMapperDto.aplicarArbolRutas(repositorio, tuple.getT2());
+                                            repositorio.setFechaActualizacion(Instant.now());
+                                            return repositorio;
+                                        })
+                                        .flatMap(repo -> {
+                                            log.info("Mongo: persistiendo repositorio | nombre={} url={}", repo.getNombre(), repo.getUrl());
+                                            return repositorioServicio.crearNuevoRepo(repo);
+                                        })
+                                        .flatMap(repoGuardado -> {
+                                            log.info("Asociando repositorio {} a celula {}", repoGuardado.getNombre(), request.getCodigoCelula());
+                                            return celulaServicio.asociarRepositorio(request.getCodigoCelula(), repoGuardado.getNombre())
+                                                    .thenReturn(repoGuardado);
+                                        });
                             })
-                            .flatMap(repo -> {
-                                log.info("Mongo: persistiendo repositorio | nombre={} url={}", repo.getNombre(), repo.getUrl());
-                                return repositorioServicio.crearNuevoRepo(repo);
-                            })
-                            .flatMap(repoGuardado -> {
-                                log.info("Asociando repositorio {} a celula {}", repoGuardado.getNombre(), request.getCodigoCelula());
-                                return celulaServicio.asociarRepositorio(request.getCodigoCelula(), repoGuardado.getNombre())
-                                        .thenReturn(repoGuardado);
-                            })
-                            .map(repositorioMapperDto::aResponse);
-                });
+                            .map(repositorioMapperDto::aResponse)
+                );
     }
     
     // ... resto de métodos ...
@@ -174,13 +194,14 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
     private Mono<Void> eliminarRepoCompleto(Repositorio repo) {
         String urlRepo = repo.getUrl();
-        log.info("Ejecutando eliminación completa para repo={}", urlRepo);
+        String ns = repo.getNamespace() != null ? repo.getNamespace() : urlRepo;
+        log.info("Ejecutando eliminación completa para repo={} con namespace={}", urlRepo, ns);
 
         Mono<Void> eliminarAsociaciones = celulaServicio.desasociarRepositorioDeTodasCelulas(repo.getNombre())
                 .doOnSuccess(v -> log.info("Asociaciones eliminadas para repo={}", urlRepo));
 
-        Mono<Void> eliminarEmbeddings = servicioEmbedding.eliminarTodosEmbeddingsPorRepo(urlRepo)
-                .doOnSuccess(v -> log.info("Embeddings eliminados para repo={}", urlRepo));
+        Mono<Void> eliminarEmbeddings = servicioEmbedding.eliminarTodosEmbeddingsPorRepo(ns)
+                .doOnSuccess(v -> log.info("Embeddings eliminados para repo={} con namespace={}", urlRepo, ns));
 
         Mono<Void> eliminarS3 = servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, repo.getUrlFolderS3Workarea())
                 .doOnSuccess(v -> log.info("Carpeta S3 eliminada para repo={}", urlRepo));
@@ -199,66 +220,63 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
         log.info("Actualizacion repositorio iniciada | url={}", urlClave);
 
         return repositorioServicio.obtenerRepo(urlClave)
-                .flatMap(existente -> actualizarDescripcion(existente, request.getDescripcion()))
-                .flatMap(repo -> procesarCambiosGit(repo, request.getRamaPrincipal()))
-                .map(repositorioMapperDto::aResponse);
+                .flatMap(existente -> {
+                    // Actualizar tags si vienen en el request
+                    if (request.getTags() != null) {
+                        existente.setTags(request.getTags());
+                    }
+                    return actualizarDescripcion(existente, request.getDescripcion());
+                })
+                .flatMap(repo -> {
+                    // Si no se especifica rama o es la misma, solo guardar sin reindexar
+                    String ramaSolicitada = request.getRamaPrincipal();
+                    if (ramaSolicitada == null || ramaSolicitada.isBlank()
+                            || ramaSolicitada.equals(repo.getRamaPrincipal())) {
+                        return repositorioServicio.actualizarRepo(repo, repo.getUrl())
+                                .map(repositorioMapperDto::aResponse);
+                    }
+                    // Si cambió la rama, procesar cambios Git (reindexar)
+                    return procesarCambiosGit(repo, ramaSolicitada)
+                            .map(repositorioMapperDto::aResponse);
+                });
     }
     
     @Override
-    public Mono<IndexacionCompletaResponseDto> indexarRepositorioCompleto(String urlRepo) {
+    public Flux<IndexacionArchivoResponseDto> indexarRepositorioCompleto(String urlRepo) {
         String urlNormalizada = normalizarUrl(urlRepo);
-        log.info("Iniciando indexacion completa para repo={}", urlNormalizada);
+        log.info("Iniciando indexacion completa en streaming para repo={}", urlNormalizada);
 
         return repositorioServicio.obtenerRepo(urlNormalizada)
-                .flatMap(repo -> {
+                .flatMapMany(repo -> {
                     if (repo.getFilesPath() == null || repo.getFilesPath().isEmpty()) {
                         log.warn("Repo={} no tiene archivos en su metadata para indexar.", repo.getNombre());
-                        IndexacionCompletaResponseDto response = new IndexacionCompletaResponseDto();
-                        response.setRepositorio(repositorioMapperDto.aResponse(repo));
-                        response.setArchivosIndexados(new ArrayList<>());
-                        response.setArchivosFallidos(new HashMap<>());
-                        return Mono.just(response);
+                        return Flux.empty();
                     }
 
                     log.info("Repo={} tiene {} archivos. Iniciando proceso de embedding concurrente...", repo.getNombre(), repo.getFilesPath().size());
 
-                    record ResultadoIndexacion(String filePath, boolean exitoso, String mensajeError) {}
+                    java.util.concurrent.atomic.AtomicBoolean algunExito = new java.util.concurrent.atomic.AtomicBoolean(false);
 
                     return Flux.fromIterable(repo.getFilesPath())
-                            .flatMap(filePath -> 
-                                embedirArchivoIndividualLanzandoError(repo, filePath)
-                                    .thenReturn(new ResultadoIndexacion(filePath, true, null))
+                            .flatMap(filePath -> {
+                                if (com.bsg.soporterag.aplicacion.util.FiltroArchivosUtil.debeOmitir(filePath)) {
+                                    return Mono.just(crearRespuestaArchivo(filePath, true, "Archivo excluido por reglas del sistema (omitido)."));
+                                }
+                                return embedirArchivoIndividualLanzandoError(repo, filePath)
+                                    .doOnSuccess(v -> algunExito.set(true))
+                                    .thenReturn(crearRespuestaArchivo(filePath, true, "Archivo indexado correctamente."))
                                     .onErrorResume(e -> {
                                         String mensajeLimpio = extraerMensajeErrorLimpio(e);
                                         log.warn("Fallo al intentar embeber el archivo '{}' en repo '{}'. Causa: {}.", filePath, repo.getNombre(), mensajeLimpio);
-                                        return Mono.just(new ResultadoIndexacion(filePath, false, mensajeLimpio));
-                                    }),
-                            3)
-                            .collectList()
-                            .flatMap(resultados -> {
-                                List<String> exitosos = new ArrayList<>();
-                                Map<String, String> fallidos = new HashMap<>();
-                                for (ResultadoIndexacion res : resultados) {
-                                    if (res.exitoso()) {
-                                        exitosos.add(res.filePath());
-                                    } else {
-                                        fallidos.put(res.filePath(), res.mensajeError());
-                                    }
+                                        return Mono.just(crearRespuestaArchivo(filePath, false, mensajeLimpio));
+                                    });
+                            }, 3)
+                            .concatWith(Mono.defer(() -> {
+                                if (algunExito.get() && !repo.isIndexado()) {
+                                    return marcarComoIndexado(repo).then(Mono.empty());
                                 }
-
-                                Mono<Repositorio> repoActualizadoMono = Mono.just(repo);
-                                if (!exitosos.isEmpty() && !repo.isIndexado()) {
-                                    repoActualizadoMono = marcarComoIndexado(repo);
-                                }
-
-                                return repoActualizadoMono.map(repoActualizado -> {
-                                    IndexacionCompletaResponseDto response = new IndexacionCompletaResponseDto();
-                                    response.setRepositorio(repositorioMapperDto.aResponse(repoActualizado));
-                                    response.setArchivosIndexados(exitosos);
-                                    response.setArchivosFallidos(fallidos);
-                                    return response;
-                                });
-                            });
+                                return Mono.empty();
+                            }));
                 });
     }
 
@@ -267,6 +285,10 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
         String urlNormalizada = normalizarUrl(request.getUrlRepo());
         String filePath = request.getFilePath();
         log.info("Iniciando indexacion individual de archivo={} en repo={}", filePath, urlNormalizada);
+
+        if (com.bsg.soporterag.aplicacion.util.FiltroArchivosUtil.debeOmitir(filePath)) {
+            return Mono.just(crearRespuestaArchivo(filePath, true, "Archivo excluido por reglas del sistema (omitido)."));
+        }
 
         Mono<byte[]> contenidoMono;
 
@@ -281,7 +303,10 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
         return repositorioServicio.obtenerRepo(urlNormalizada)
                 .flatMap(repo -> contenidoMono
-                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, repo.getUrl(), filePath, contenido))
+                        .flatMap(contenido -> {
+                            String ns = repo.getNamespace() != null ? repo.getNamespace() : repo.getUrl();
+                            return servicioEmbedding.actualizarEmbedding(false, ns, filePath, contenido);
+                        })
                         .thenReturn(crearRespuestaArchivo(filePath, true, "Archivo indexado correctamente."))
                 )
                 .onErrorResume(e -> {
@@ -359,23 +384,23 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
     private Mono<Void> procesarEmbeddingsCambios(Repositorio repo, String rama, CambiosEntreCommitsGit cambios) {
         String url = repo.getUrl();
-        String nombreRepo = repo.getNombre();
+        String ns = repo.getNamespace() != null ? repo.getNamespace() : url;
 
         Mono<Void> eliminaciones = Flux.fromIterable(cambios.rutasEliminadas() != null ? cambios.rutasEliminadas() : java.util.List.of())
                 .doOnNext(ruta -> log.info("Eliminando embedding: {}", ruta))
-                .flatMap(ruta -> servicioEmbedding.eliminarEmbedding(false, url, ruta))
+                .flatMap(ruta -> servicioEmbedding.eliminarEmbedding(false, ns, ruta))
                 .then();
 
         Mono<Void> agregaciones = Flux.fromIterable(cambios.rutasAgregadas() != null ? cambios.rutasAgregadas() : java.util.List.of())
                 .doOnNext(ruta -> log.info("Agregando embedding: {}", ruta))
                 .flatMap(ruta -> servicioJGit.extraerContenidoArchivo(url, rama, ruta)
-                        .flatMap(contenido -> servicioEmbedding.embedirArchivo(false, url, ruta, contenido)))
+                        .flatMap(contenido -> servicioEmbedding.embedirArchivo(false, ns, ruta, contenido)))
                 .then();
 
         Mono<Void> modificaciones = Flux.fromIterable(cambios.rutasModificadas() != null ? cambios.rutasModificadas() : java.util.List.of())
                 .doOnNext(ruta -> log.info("Actualizando embedding: {}", ruta))
                 .flatMap(ruta -> servicioJGit.extraerContenidoArchivo(url, rama, ruta)
-                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, url, ruta, contenido)))
+                        .flatMap(contenido -> servicioEmbedding.actualizarEmbedding(false, ns, ruta, contenido)))
                 .then();
 
         return Mono.when(eliminaciones, agregaciones, modificaciones);
@@ -394,7 +419,8 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
         return servicioJGit.extraerContenidoArchivo(repo.getUrl(), repo.getRamaPrincipal(), filePath)
                 .flatMap(contenido -> {
                     log.info("Procesando embedding para archivo: {}", filePath);
-                    return servicioEmbedding.actualizarEmbedding(false, repo.getUrl(), filePath, contenido)
+                    String ns = repo.getNamespace() != null ? repo.getNamespace() : repo.getUrl();
+                    return servicioEmbedding.actualizarEmbedding(false, ns, filePath, contenido)
                             .doOnSuccess(v -> log.info("Embedding exitoso para archivo: {}", filePath));
                 });
     }
@@ -422,5 +448,24 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
             throw new IllegalArgumentException("La URL del repositorio es obligatoria");
         }
         return url.trim();
+    }
+
+    @Override
+    public Mono<String> detectarRamaPrincipal(String urlRepo) {
+        String url = normalizarUrl(urlRepo);
+        return servicioJGit.resolverRama(url, null);
+    }
+
+    @Override
+    public Flux<com.bsg.soporterag.dominio.modelo.RamaGit> listarRamas(String urlRepo) {
+        String url = normalizarUrl(urlRepo);
+        return servicioJGit.extraerRamas(url);
+    }
+
+    @Override
+    public Mono<String> obtenerContenidoArchivo(String urlRepo, String rama, String filePath) {
+        String url = normalizarUrl(urlRepo);
+        return servicioJGit.extraerContenidoArchivo(url, rama, filePath)
+                .map(bytes -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
     }
 }

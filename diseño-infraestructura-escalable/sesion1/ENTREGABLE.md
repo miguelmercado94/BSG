@@ -11,22 +11,24 @@
 |-----|----------------|
 | **Aplicación DocViz (usuario final)** | [http://bsg-frontend-alb-2137705119.us-east-1.elb.amazonaws.com/](http://bsg-frontend-alb-2137705119.us-east-1.elb.amazonaws.com/) |
 | **Vídeo demo (Google Drive)** | [DocViz — Sesión 1 (demo)](https://drive.google.com/file/d/1dmq_u4mbxH84YdbjFWH9rkdq_SFsAVGx/view?usp=sharing) |
-| **Versiones finales desplegadas (ECS)** | **Frontend** `1.0.32` · **DocViz backend** `3.0.46` · **back-security** `1.0.9` (coinciden con `version.txt` y tags en Docker Hub / Terraform). |
+| **Versiones finales desplegadas (ECS)** | **Frontend** `1.0.32` · **DocViz backend (soporte-rag-mt)** `0.1.0` · **back-security** `1.0.9` (coinciden con `version.txt` y tags en Docker Hub / Terraform). |
 | **Usuarios de prueba** | `admin01` (clave: `Admin123`) / `soporte01` (clave: `Soporte123`). |
 
 ---
 
 ## 1. Resumen ejecutivo
 
-El sistema **DocViz** es una aplicación **API-first** formada por tres piezas desacopladas:
+El sistema **DocViz** es una aplicación **API-first** con una arquitectura de microservicios formada por las siguientes piezas desacopladas:
 
 | Pieza | Rol |
 |--------|-----|
-| **Frontend** | SPA React + Vite; Nginx sirve estáticos y **proxifica** `/api` y `/security-api` hacia los microservicios internos (mismo origen para el navegador). |
+| **Frontend** | SPA React + Vite; Nginx sirve estáticos y **proxifica** `/api` (enrutado a `soporte-rag-mt`) y `/security-api` (enrutado a `back-security`) a través del Gateway. |
+| **eureka-server** | Servidor de descubrimiento (Eureka Server) que registra dinámicamente las instancias activas de los microservicios. |
+| **api-gateway** | Spring Cloud Gateway; actúa como punto de acceso único público, enrutando dinámicamente las peticiones. |
 | **back-security** | Autenticación (JWT), usuarios y roles; WebFlux + R2DBC; integración con Redis y DynamoDB para revocación de tokens. |
-| **backend DocViz** | API de dominio: Git, índice vectorial (**pgvector** en PostgreSQL), **RAG** (recuperación + generación con **Spring AI**), work area, soporte, S3, cabecera `X-DocViz-User`. |
+| **soporte-rag-mt** (Core) | API de dominio (reemplaza al antiguo `backend-sesion1` deprecado): Git, índice vectorial (**pgvector** en PostgreSQL), **RAG** (recuperación + generación con **Spring AI**), work area, soporte, S3, cabecera `X-DocViz-User`. |
 
-El núcleo del curso respecto a **IA aplicada** está en el backend DocViz: **embeddings** para indexar fragmentos del repositorio y **modelo de chat** para responder con contexto recuperado (véase **sección 3**).
+El núcleo del curso respecto a **IA aplicada** está en el backend DocViz ([soporte-rag-mt](file:///c:/Users/ADMIN/Documents/BSG/diseño-infraestructura-escalable/sesion1/soporte-rag-mt)): **embeddings** para indexar fragmentos del repositorio y **modelo de chat** para responder con contexto recuperado (véase **sección 3**).
 
 La infraestructura en **AWS** separa entrada pública (ALB, API Gateway) de **ECS Fargate**, Cloud Map, RDS, Redis, DynamoDB y S3, definida en **Terraform** (`terrafom-project/main.tf`). La elección de **AWS frente a Google Cloud** se argumenta en la **sección 4**.
 
@@ -36,9 +38,11 @@ La infraestructura en **AWS** separa entrada pública (ALB, API Gateway) de **EC
 
 | Directorio | Tecnología | Responsabilidad |
 |------------|------------|-----------------|
-| `frontend-sesion1` | React, TypeScript, Vite | UI; login → `/security-api`; API DocViz → `/api`; cabeceras `X-DocViz-User` y rol. |
-| `back-security-sesion1` | Spring WebFlux, R2DBC | Login, registro, JWT; prefijo `/security-auth` tras el proxy. |
-| `backend-sesion1` | Spring Boot 3, JDBC, **Spring AI** | Git, **pgvector**, **RAG**, S3, soporte; configuración de **chat y embeddings** por perfil Spring. |
+| `frontend-sesion1` | React, TypeScript, Vite | UI; login → `/security-api` y API DocViz → `/api` a través de `api-gateway`; cabeceras `X-DocViz-User` y rol. |
+| `eureka-server` | Spring Cloud Discovery Server (Gradle) | Servidor de descubrimiento para registro dinámico de microservicios. |
+| `api-gateway` | Spring Cloud Gateway (Gradle) | Puerta de entrada (puerto `8080`), enruta peticiones hacia `back-security` y `soporte-rag-mt` usando balanceo de carga. |
+| `back-security-sesion1` | Spring WebFlux, R2DBC | Login, registro, JWT; prefijo `/security-auth` expuesto tras el Gateway. |
+| `soporte-rag-mt` | Spring Boot 3, Maven, **Spring AI** | Core RAG, Git, **pgvector**, S3 y soporte; reemplaza al antiguo `backend-sesion1` deprecado. |
 
 **Docker / versionado:** imágenes en Docker Hub; `version.txt` por módulo e imagen referenciada en Terraform (`locals` en `main.tf`).
 
@@ -60,7 +64,7 @@ Todo el acoplamiento a proveedores externos está centralizado en **Spring AI** 
 
 ### 3.2 Producción en AWS (perfil `pdn`)
 
-En ECS el backend arranca con **`SPRING_PROFILES_ACTIVE=pdn`**. La configuración activa **OpenAI** para **chat y embeddings** vía API HTTPS (`api.openai.com`), sin Ollama en el contenedor (auto-config de Ollama excluida en `application-pdn.properties`).
+En ECS el backend core (`soporte-rag-mt`) arranca con **`SPRING_PROFILES_ACTIVE=pdn`**. La configuración activa **OpenAI** para **chat y embeddings** vía API HTTPS (`api.openai.com`), sin Ollama en el contenedor (auto-config de Ollama excluida en `application-pdn.properties`).
 
 | Rol | Modelo | Detalle |
 |-----|--------|---------|
@@ -88,7 +92,7 @@ Similar a producción en cuanto a **OpenAI**: **`gpt-4o-mini`** para chat y **`t
 
 ### 3.5 Relación con la infraestructura
 
-- El task **DocViz en ECS** tiene **más CPU y memoria** que el frontend porque **embeddings e inferencia** (y la ingesta de repositorios) concentran carga.
+- El task **soporte-rag-mt en ECS** tiene **más CPU y memoria** que el frontend porque **embeddings e inferencia** (y la ingesta de repositorios) concentran carga.
 - Las **llaves de OpenAI** no se versionan: llegan por **Terraform / variables sensibles** al task definition o por secretos del entorno de CI/CD.
 - **PostgreSQL + pgvector** es el almacén canónico del índice; la escalabilidad del **relleno del índice** y del **tráfico de chat** se apoya en escalar tasks ECS y dimensionar RDS según métricas.
 
@@ -104,16 +108,16 @@ Elegimos **AWS** por criterios prácticos del curso, no porque sea intrínsecame
 
 | Recurso | Uso en el proyecto |
 |---------|---------------------|
-| **ECS Fargate** (`bsg-cluster`) | Tres servicios: `bsg-frontend-service`, `bsg-back-security-service`, `bsg-backend-service`; logs en **CloudWatch** `/ecs/bsg-frontend`, `/ecs/bsg-back-security`, `/ecs/bsg-backend`. |
+| **ECS Fargate** (`bsg-cluster`) | Cinco servicios: `bsg-frontend-service`, `bsg-back-security-service`, `bsg-soporte-rag-mt-service`, `bsg-api-gateway-service`, `bsg-eureka-service`; logs en **CloudWatch** para cada uno de ellos. |
 | **ALB** (`bsg-frontend-alb`) | Entrada HTTP pública hacia el task del frontend (target group puerto 80). |
-| **NLB internos** | TCP **8081** (security) y **8080** (DocViz); integración API Gateway por **ARN de listener**. |
-| **API Gateway HTTP API** | Rutas `/security-auth/{proxy+}` y `/docviz/{proxy+}` → **HTTP_PROXY** + **VPC Link**. |
-| **Cloud Map** (`bsg.internal`) | **`security.bsg.internal`** y **`docviz.bsg.internal`**. |
-| **RDS PostgreSQL** | Bases `bsg_security` y `docviz` (esta última debe existir). |
-| **ElastiCache Redis** | Security. |
-| **DynamoDB** (`bsg_revoked_tokens`) | Tokens revocados; IAM en task role del security. |
-| **S3** (tres buckets) | Soporte, borradores, work area del backend DocViz. |
-| **IAM** | Roles ECS y políticas DynamoDB / S3 según servicio. |
+| **NLB internos** | Balanceo TCP para los servicios de la VPC (Gateway en puerto `8080`, Eureka en `8761`, Security en `8081` y Core en `8090`). |
+| **API Gateway HTTP API** | Rutas `/security-auth/{proxy+}` y `/docviz/{proxy+}` hacia el `api-gateway` interno → **HTTP_PROXY** + **VPC Link**. |
+| **Cloud Map** (`bsg.internal`) | Registro de servicios DNS internos: `security.bsg.internal`, `soporte-rag-mt.bsg.internal`, `gateway.bsg.internal` y `eureka.bsg.internal`. |
+| **RDS PostgreSQL** | Bases `bsg_security` y `docviz` (esta última con pgvector). |
+| **ElastiCache Redis** | Utilizado por `back-security` para almacenar tokens o sesiones temporales. |
+| **DynamoDB** (`bsg_revoked_tokens`) | Registro de tokens JWT revocados. |
+| **S3** (tres buckets) | Soporte, borradores, work area de `soporte-rag-mt`. |
+| **IAM** | Roles ECS y políticas IAM para DynamoDB y buckets S3. |
 
 Outputs útiles: `frontend_alb_url`, `api_gateway_endpoint`, `rds_endpoint`, `redis_endpoint`, DNS de NLB, buckets S3.
 
@@ -124,11 +128,11 @@ Outputs útiles: `frontend_alb_url`, `api_gateway_endpoint`, `rds_endpoint`, `re
 ### 6.1 Separación de responsabilidades y microservicios
 
 - **Seguridad** y **DocViz** son **despliegues distintos**, prefijos HTTP claros (`/security-auth` vs `/docviz`).
-- El **frontend** solo sirve UI y proxy; la **IA** reside en el backend DocViz.
+- El **frontend** solo sirve UI y proxy; la **IA reside en el backend DocViz (`soporte-rag-mt`).**
 
 ### 6.2 Escalabilidad horizontal y desacoplamiento
 
-- **ECS Fargate** permite escalar réplicas por servicio (el backend DocViz puede escalarse según carga de **ingesta y chat**).
+- **ECS Fargate** permite escalar réplicas por servicio (el backend `soporte-rag-mt` puede escalarse según carga de **ingesta y chat**).
 - **NLB**, **Cloud Map** y **API Gateway** desacoplan clientes de la ubicación exacta de los tasks.
 
 ### 6.3 Seguridad
@@ -202,10 +206,12 @@ Referencias en Terraform (`terrafom-project/main.tf`, `locals`) y en cada `versi
 | Servicio | Tag / versión | Archivo `version.txt` |
 |----------|----------------|------------------------|
 | **Frontend** (Nginx + SPA) | **1.0.32** | `frontend-sesion1/version.txt` |
-| **DocViz backend** | **3.0.46** | `backend-sesion1/version.txt` |
+| **DocViz backend (soporte-rag-mt)** | **0.1.0** | `soporte-rag-mt/version.txt` |
 | **back-security** | **1.0.9** | `back-security-sesion1/version.txt` |
+| **api-gateway** | *latest* | — |
+| **eureka-server** | *latest* | — |
 
-Imágenes Docker Hub usadas por ECS: `mmercado94/frontend-sesion1:<tag>`, `mmercado94/backend-sesion1:<tag>`, `mmercado94/back-security-sesion1:<tag>` (mismo número que la tabla).
+Imágenes Docker Hub usadas por ECS: `mmercado94/frontend-sesion1:<tag>`, `mmercado94/soporte-rag-mt:<tag>`, `mmercado94/back-security-sesion1:<tag>`, `mmercado94/api-gateway:latest`, `mmercado94/eureka-server:latest` (mismo número que la tabla o última versión).
 
 ---
 

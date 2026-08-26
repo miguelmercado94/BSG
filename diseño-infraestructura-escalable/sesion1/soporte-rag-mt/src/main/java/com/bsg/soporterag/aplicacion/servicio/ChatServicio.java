@@ -1,6 +1,7 @@
 package com.bsg.soporterag.aplicacion.servicio;
 
 import com.bsg.soporterag.aplicacion.dto.response.ResultadoAnalisisIntencionDto;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -16,4 +17,10 @@ public interface ChatServicio {
     Mono<String> conversarDirecto(String conversacionId, String mensaje);
 
     Mono<String> resumirConversacion(String conversacionId, String historialChat);
+
+    /** Streaming token-por-token desde el LLM. */
+    Flux<String> conversarStream(String conversacionId, String mensaje, String contextoExtraido);
+
+    /** Streaming directo sin contexto RAG. */
+    Flux<String> conversarDirectoStream(String conversacionId, String mensaje);
 }

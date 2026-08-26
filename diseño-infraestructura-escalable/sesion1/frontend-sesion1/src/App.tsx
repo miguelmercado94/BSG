@@ -7,6 +7,7 @@ import { WorkspacePage } from "./pages/WorkspacePage";
 import { TaskNotebookPage } from "./pages/TaskNotebookPage";
 import { AdminCellsListPage } from "./pages/AdminCellsListPage";
 import { AdminCellEditorPage } from "./pages/AdminCellEditorPage";
+import { AdminTagsPage } from "./pages/AdminTagsPage";
 import { SupportCellsPage } from "./pages/SupportCellsPage";
 import { SupportCellTasksPage } from "./pages/SupportCellTasksPage";
 
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/admin/cells" element={<AdminCellsListPage />} />
           <Route path="/admin/cells/new" element={<AdminCellEditorPage />} />
           <Route path="/admin/cells/:cellId/edit" element={<AdminCellEditorPage />} />
+          <Route path="/admin/tags" element={<AdminTagsPage />} />
           <Route path="/support/cells" element={<SupportCellsPage />} />
           <Route path="/support/cells/:cellId/tasks" element={<SupportCellTasksPage />} />
           <Route path="/app" element={<WorkspacePage />} />

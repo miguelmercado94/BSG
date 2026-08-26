@@ -67,8 +67,9 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
 
                     return servicioBucketS3.crearArchivo(RolBucketS3.WORKAREA, s3Path, contenido, "text/markdown")
                             .then(documentoSoporteServicio.crear(nuevoSoporte))
-                            .flatMap(soporteGuardado -> 
-                                servicioEmbedding.embedirArchivo(true, request.getUrlRepo(), soporteGuardado.codigoSoporte(), contenido)
+                            .flatMap(soporteGuardado -> {
+                                String ns = soporteGuardado.namespaceVectorial() != null ? soporteGuardado.namespaceVectorial() : request.getUrlRepo();
+                                return servicioEmbedding.embedirArchivo(true, ns, soporteGuardado.codigoSoporte(), contenido)
                                     .onErrorResume(e -> {
                                         log.error("Fallo el embedding para el soporte {}, haciendo rollback...", request.getCodigo());
                                         return servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, s3Path)
@@ -77,8 +78,8 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                                                 .onErrorResume(e3 -> Mono.empty())
                                                 .then(Mono.error(new RuntimeException("Fallo al procesar el embedding: " + e.getMessage())));
                                     })
-                                    .thenReturn(soporteGuardado)
-                            );
+                                    .thenReturn(soporteGuardado);
+                            });
                 })
                 .flatMap(this::enriquecerConPresigned);
     }
@@ -103,7 +104,7 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                              Mono<Void> borrarViejoS3 = existente.urlBucketS3().equals(resolvedPath) ? Mono.empty() : servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, existente.urlBucketS3());
                              s3AndEmbeddingTask = borrarViejoS3
                                      .then(servicioBucketS3.crearArchivo(RolBucketS3.WORKAREA, resolvedPath, contenido, "text/markdown"))
-                                     .then(servicioEmbedding.actualizarEmbedding(true, existente.urlRepo(), existente.codigoSoporte(), contenido));
+                                     .then(servicioEmbedding.actualizarEmbedding(true, existente.namespaceVectorial(), existente.codigoSoporte(), contenido));
                         }
 
                         DocumentoSoporte actualizado = new DocumentoSoporte(
@@ -129,7 +130,7 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
     @Override
     public Mono<SoporteResponseDto> eliminar(String codigo) {
         return documentoSoporteServicio.obtenerPorCodigo(codigo)
-                .flatMap(soporte -> servicioEmbedding.eliminarEmbedding(true, soporte.urlRepo(), soporte.codigoSoporte())
+                .flatMap(soporte -> servicioEmbedding.eliminarEmbedding(true, soporte.namespaceVectorial(), soporte.codigoSoporte())
                         .then(servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, soporte.urlBucketS3()))
                         .then(documentoSoporteServicio.eliminar(codigo))
                         .then(enriquecerConPresigned(soporte))

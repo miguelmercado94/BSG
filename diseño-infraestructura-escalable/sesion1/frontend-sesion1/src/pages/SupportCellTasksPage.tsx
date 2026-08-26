@@ -1,66 +1,66 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  connectGit,
-  continueTask,
   createTask,
+  deleteTask,
   fetchCellRepos,
   fetchCells,
   fetchTasks,
   getUserId,
   isSupportRole,
-  vectorIngestStream,
+  updateTask,
+  updateTaskStatus,
 } from "../api/client";
 import { saveGitConnectRequest } from "../lib/docvizGitSession";
-import type { CellRepoResponse, CellResponse, IngestProgressEvent, TaskResponse } from "../types";
+import type { CellRepoResponse, CellResponse, TaskResponse } from "../types";
 
-type IngestProgressState = {
-  totalFiles: number;
-  filesProcessed: number;
-  chunksIndexed: number;
-  currentFile: string | null;
-  detail: string | null;
-  mode: "stream" | "sync";
-};
-
-function buildTaskContext(
-  cellLabel: string,
-  returnPath: string,
-  taskId: number,
-  huCode: string,
-  enunciado: string,
-  chatConversationId: string | null | undefined,
-  resumeWorkspaceChat: boolean,
-) {
-  return {
-    taskId,
-    chatConversationId: chatConversationId ?? undefined,
-    huCode,
-    enunciado,
-    cellLabel,
-    returnPath,
-    resumeWorkspaceChat,
-  };
+/** Badge de estado con color. */
+function StatusBadge({ status }: { status: string }) {
+  let label: string;
+  let color: string;
+  let bg: string;
+  switch (status) {
+    case "BORRADOR":
+      label = "Borrador"; color = "#ccc"; bg = "#3a3a3a"; break;
+    case "INICIADA":
+      label = "En progreso"; color = "#90caf9"; bg = "#1a3a5c"; break;
+    case "TERMINADA":
+      label = "Terminada"; color = "#a5d6a7"; bg = "#1b3d1b"; break;
+    case "CANCELADA":
+      label = "Cancelada"; color = "#ef9a9a"; bg = "#3d1b1b"; break;
+    default:
+      label = status; color = "#ccc"; bg = "#3a3a3a";
+  }
+  return (
+    <span style={{ display: "inline-block", padding: "0.15rem 0.5rem", borderRadius: "4px", fontSize: "0.75rem", fontWeight: 600, color, backgroundColor: bg }}>
+      {label}
+    </span>
+  );
 }
 
 export function SupportCellTasksPage() {
   const navigate = useNavigate();
   const { cellId: cellIdParam } = useParams<{ cellId: string }>();
-  const cellId = cellIdParam ? Number(cellIdParam) : NaN;
+  const cellId = cellIdParam ?? "";
 
   const [cellLabel, setCellLabel] = useState("");
   const [repos, setRepos] = useState<CellRepoResponse[]>([]);
   const [tasks, setTasks] = useState<TaskResponse[]>([]);
-  const [repoId, setRepoId] = useState<number | "">("");
+  const [repoId, setRepoId] = useState<string | "">("");
   const [huCode, setHuCode] = useState("");
   const [enunciado, setEnunciado] = useState("");
 
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [indexing, setIndexing] = useState(false);
+  const [_indexing, _setIndexing] = useState(false);
   const [ingestErr, setIngestErr] = useState<string | null>(null);
-  const [ingestProgress, setIngestProgress] = useState<IngestProgressState | null>(null);
-  const [continuingId, setContinuingId] = useState<number | null>(null);
+  const [continuingId, setContinuingId] = useState<string | null>(null);
+
+  // Edit inline state
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editTitulo, setEditTitulo] = useState("");
+  const [editEnunciado, setEditEnunciado] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   const returnPath = `/support/cells/${cellId}/tasks`;
 
@@ -73,13 +73,22 @@ export function SupportCellTasksPage() {
       navigate("/admin/cells", { replace: true });
       return;
     }
-    if (!Number.isFinite(cellId) || cellId <= 0) {
+    if (!cellId) {
       navigate("/support/cells", { replace: true });
     }
   }, [navigate, cellId]);
 
+  async function loadTasks() {
+    try {
+      const tlist = await fetchTasks(cellId);
+      setTasks(tlist);
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   useEffect(() => {
-    if (!Number.isFinite(cellId) || cellId <= 0) return;
+    if (!cellId) return;
     let cancelled = false;
     (async () => {
       try {
@@ -103,73 +112,6 @@ export function SupportCellTasksPage() {
     };
   }, [cellId]);
 
-  function applyIngestEvent(ev: IngestProgressEvent) {
-    if (ev.phase === "START" && ev.totalFiles != null) {
-      setIngestProgress({
-        totalFiles: ev.totalFiles,
-        filesProcessed: 0,
-        chunksIndexed: 0,
-        currentFile: null,
-        detail: null,
-        mode: "stream",
-      });
-    }
-    if (ev.phase === "FILE" || ev.phase === "PROGRESS") {
-      setIngestProgress((prev) => ({
-        totalFiles: ev.totalFiles ?? prev?.totalFiles ?? 0,
-        filesProcessed: ev.filesProcessed ?? 0,
-        chunksIndexed: ev.chunksIndexed ?? 0,
-        currentFile: ev.currentFile ?? null,
-        detail: ev.detail ?? null,
-        mode: "stream",
-      }));
-    }
-  }
-
-  async function runConnectAndWorkspace(
-    cont: Awaited<ReturnType<typeof continueTask>>,
-    taskCtx: ReturnType<typeof buildTaskContext>,
-    /** Solo en tarea nueva: primer mensaje automático al modelo. Al continuar una tarea no se reenvía el prompt. */
-    includeInitialChatPrompt: boolean,
-  ) {
-    const ns = cont.vectorNamespaceHint?.trim();
-    const connectBody = {
-      ...cont.gitConnect,
-      ...(ns ? { vectorNamespace: ns } : {}),
-    };
-    const res = await connectGit(connectBody);
-    saveGitConnectRequest(connectBody);
-    const navState: Record<string, unknown> = {
-      connect: res,
-      taskCellRepoId: cont.cellRepoId,
-      taskContext: taskCtx,
-    };
-    if (includeInitialChatPrompt && cont.initialChatPrompt?.trim()) {
-      navState.initialChatPrompt = cont.initialChatPrompt;
-    }
-    if (!ns) {
-      const r = await vectorIngestStream(applyIngestEvent);
-      navigate("/app", {
-        state: {
-          ...navState,
-          initialIngest: r,
-        },
-      });
-      return;
-    }
-    navigate("/app", {
-      state: {
-        ...navState,
-        initialIngest: {
-          filesProcessed: 0,
-          chunksIndexed: 0,
-          namespace: ns,
-          skipped: [],
-        },
-      },
-    });
-  }
-
   async function onSubmitNew(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -186,40 +128,19 @@ export function SupportCellTasksPage() {
     }
 
     try {
-      const created = await createTask({
+      await createTask({
         huCode: hu,
-        cellRepoId: repoId as number,
+        cellRepoId: repoId,
+        cellId: cellId,
         enunciado: en,
       });
-      const cont = await continueTask(created.id);
-      if (!cont.vectorNamespaceHint?.trim()) {
-        setIndexing(true);
-        setIngestProgress({
-          totalFiles: 0,
-          filesProcessed: 0,
-          chunksIndexed: 0,
-          currentFile: null,
-          detail: null,
-          mode: "stream",
-        });
-      }
-      await runConnectAndWorkspace(
-        cont,
-        buildTaskContext(
-          cont.cellName?.trim() || cellLabel,
-          returnPath,
-          created.id,
-          hu,
-          en,
-          cont.chatConversationId ?? created.chatConversationId,
-          false,
-        ),
-        true,
-      );
+      // Refresh task list — the task stays as BORRADOR
+      await loadTasks();
+      // Reset form
+      setHuCode("");
+      setEnunciado("");
     } catch (err) {
-      setIngestErr(err instanceof Error ? err.message : String(err));
-      setIndexing(false);
-      setIngestProgress(null);
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -228,41 +149,92 @@ export function SupportCellTasksPage() {
     setIngestErr(null);
     setContinuingId(task.id);
     try {
-      const cont = await continueTask(task.id);
-      if (!cont.vectorNamespaceHint?.trim()) {
-        setIndexing(true);
-        setIngestProgress({
-          totalFiles: 0,
-          filesProcessed: 0,
-          chunksIndexed: 0,
-          currentFile: null,
-          detail: null,
-          mode: "stream",
-        });
+      const isNewStart = task.status === "BORRADOR";
+      // If BORRADOR, transition to INICIADA first
+      if (isNewStart) {
+        await updateTaskStatus(task.id, "INICIADA");
       }
-      await runConnectAndWorkspace(
-        cont,
-        buildTaskContext(
-          cont.cellName?.trim() || cellLabel,
-          returnPath,
-          task.id,
-          task.huCode,
-          task.enunciado,
-          cont.chatConversationId ?? task.chatConversationId,
-          true,
-        ),
-        false,
-      );
+      // Save git session so workspace doesn't redirect to login
+      const repoUrl = (task as TaskResponse & { cellRepoId?: string }).cellRepoId || "";
+      saveGitConnectRequest({
+        mode: "HTTPS_PUBLIC",
+        repositoryUrl: repoUrl,
+      });
+      // Limpiar dedupe del auto-send para que el enunciado se envíe como primer chat
+      try {
+        const dedupeKey = `docviz:autoTaskChat:${getUserId()}:task-${task.id}`;
+        sessionStorage.removeItem(dedupeKey);
+        sessionStorage.removeItem(`docviz:autoResumeFirst:${task.id}`);
+      } catch { /* ignore */ }
+      navigate("/app", {
+        state: {
+          connect: {
+            usuario: getUserId(),
+            connected: true,
+            repositoryRoot: repoUrl,
+            directory: { folder: "", archivos: [], folders: [] },
+          },
+          taskCellRepoId: repoUrl,
+          initialChatPrompt: isNewStart ? (task.enunciado || undefined) : undefined,
+          initialIngest: { filesProcessed: 0, chunksIndexed: 0, namespace: "", skipped: [] },
+          taskContext: {
+            taskId: task.id,
+            huCode: task.huCode,
+            enunciado: task.enunciado,
+            cellLabel,
+            returnPath,
+            resumeWorkspaceChat: !isNewStart,
+          },
+        },
+      });
     } catch (err) {
-      setIngestErr(err instanceof Error ? err.message : String(err));
-      setIndexing(false);
-      setIngestProgress(null);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setContinuingId(null);
     }
   }
 
-  const busy = indexing;
+  async function onDeleteTask(task: TaskResponse) {
+    if (!window.confirm(`¿Eliminar la tarea "${task.huCode}"? Esta acción no se puede deshacer.`)) {
+      return;
+    }
+    try {
+      await deleteTask(task.id);
+      await loadTasks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function onStartEdit(task: TaskResponse) {
+    setEditingTaskId(task.id);
+    setEditTitulo(task.huCode);
+    setEditEnunciado(task.enunciado);
+  }
+
+  function onCancelEdit() {
+    setEditingTaskId(null);
+    setEditTitulo("");
+    setEditEnunciado("");
+  }
+
+  async function onSaveEdit(task: TaskResponse) {
+    setEditSaving(true);
+    try {
+      await updateTask(task.id, {
+        titulo: editTitulo.trim() || undefined,
+        enunciadoPrincipal: editEnunciado.trim() || undefined,
+      });
+      await loadTasks();
+      setEditingTaskId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  const busy = _indexing;
   const selectedRepo = repos.find((x) => x.id === repoId);
 
   return (
@@ -286,27 +258,6 @@ export function SupportCellTasksPage() {
         </p>
       )}
 
-      {indexing && ingestProgress && (
-        <section className="card connect-page__indexing" aria-live="polite">
-          <h2 className="connect-page__indexing-title">Indexando repositorio</h2>
-          <div className="ingest-progress ingest-progress--bar connect-page__ingest-box">
-            <div className="ingest-progress__stats ingest-progress__stats--bar">
-              {ingestProgress.totalFiles > 0 ? (
-                <>
-                  Archivos:{" "}
-                  <strong>
-                    {ingestProgress.filesProcessed} / {ingestProgress.totalFiles}
-                  </strong>
-                  <span className="muted"> · Chunks: {ingestProgress.chunksIndexed}</span>
-                </>
-              ) : (
-                <span className="muted">Preparando lista…</span>
-              )}
-            </div>
-          </div>
-        </section>
-      )}
-
       {!busy && tasks.length > 0 && (
         <section className="card" style={{ marginBottom: "1rem" }}>
           <h2 className="h3">Mis tareas en esta célula</h2>
@@ -325,16 +276,101 @@ export function SupportCellTasksPage() {
                 }}
               >
                 <strong>{t.huCode}</strong>
-                <span className="muted">{t.status}</span>
-                <span style={{ flex: "1 1 100%", fontSize: "0.9rem" }}>{t.enunciado.slice(0, 160)}{t.enunciado.length > 160 ? "…" : ""}</span>
-                <button
-                  type="button"
-                  className="btn primary btn--small"
-                  disabled={continuingId === t.id}
-                  onClick={() => onContinueTask(t)}
-                >
-                  {continuingId === t.id ? "Abriendo…" : "Continuar en workspace"}
-                </button>
+                <StatusBadge status={t.status} />
+                <span style={{ flex: "1 1 100%", fontSize: "0.9rem" }}>
+                  {t.enunciado.slice(0, 160)}{t.enunciado.length > 160 ? "…" : ""}
+                </span>
+
+                {/* Inline edit form */}
+                {editingTaskId === t.id && (
+                  <div style={{ flex: "1 1 100%", marginTop: "0.5rem" }}>
+                    <label className="field" style={{ marginBottom: "0.4rem" }}>
+                      <span>Título</span>
+                      <input
+                        value={editTitulo}
+                        onChange={(ev) => setEditTitulo(ev.target.value)}
+                        disabled={editSaving}
+                      />
+                    </label>
+                    <label className="field" style={{ marginBottom: "0.4rem" }}>
+                      <span>Enunciado</span>
+                      <textarea
+                        value={editEnunciado}
+                        onChange={(ev) => setEditEnunciado(ev.target.value)}
+                        rows={3}
+                        disabled={editSaving}
+                      />
+                    </label>
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <button
+                        type="button"
+                        className="btn primary btn--small"
+                        disabled={editSaving}
+                        onClick={() => onSaveEdit(t)}
+                      >
+                        {editSaving ? "Guardando…" : "Guardar"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        disabled={editSaving}
+                        onClick={onCancelEdit}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  {t.status === "BORRADOR" && editingTaskId !== t.id && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        onClick={() => onStartEdit(t)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        style={{ color: "#ef5350", borderColor: "#ef5350" }}
+                        onClick={() => onDeleteTask(t)}
+                      >
+                        Eliminar
+                      </button>
+                    </>
+                  )}
+
+                  {(t.status === "BORRADOR" || t.status === "INICIADA") && (
+                    <button
+                      type="button"
+                      className="btn primary btn--small"
+                      disabled={continuingId === t.id}
+                      onClick={() => onContinueTask(t)}
+                    >
+                      {continuingId === t.id
+                        ? "Abriendo…"
+                        : t.status === "BORRADOR"
+                          ? "Iniciar en workspace"
+                          : "Continuar en workspace"}
+                    </button>
+                  )}
+
+                  {(t.status === "TERMINADA" || t.status === "CANCELADA") && (
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      disabled
+                      title="Tarea finalizada"
+                      style={{ opacity: 0.5, cursor: "not-allowed" }}
+                    >
+                      Tarea finalizada
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
@@ -349,8 +385,7 @@ export function SupportCellTasksPage() {
             <select
               value={repoId === "" ? "" : String(repoId)}
               onChange={(ev) => {
-                const v = ev.target.value;
-                setRepoId(v === "" ? "" : Number(v));
+                setRepoId(ev.target.value);
               }}
               required
               disabled={repos.length === 0}
@@ -389,7 +424,6 @@ export function SupportCellTasksPage() {
               rows={5}
               required
               minLength={1}
-              pattern=".*\S.*"
               title="El enunciado es obligatorio y no puede ser solo espacios."
               placeholder="Describe el problema o la petición de soporte…"
             />
@@ -399,7 +433,7 @@ export function SupportCellTasksPage() {
           {ingestErr && <p className="error">{ingestErr}</p>}
 
           <button type="submit" className="btn primary">
-            Crear y continuar al workspace
+            Crear tarea
           </button>
         </form>
       )}

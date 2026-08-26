@@ -14,4 +14,8 @@ public class RepositorioResponseDto {
     private String urlFolderS3Workarea;
     private List<CelulaResumenDto> celulasAsociadas;
     private List<String> archivosS3Workarea;
+    private List<String> filesPath;
+    private List<String> folderPath;
+    private String vectorNamespace;
+    private List<String> tags;
 }

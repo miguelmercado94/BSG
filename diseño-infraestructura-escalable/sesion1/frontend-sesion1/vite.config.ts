@@ -4,8 +4,10 @@ import type { ProxyOptions } from "vite";
 import { defineConfig } from "vitest/config";
 
 /**
- * POST /vector/ingest/stream puede tardar muchos minutos (NDJSON).
- * El proxy de Node por defecto corta la conexión y el cliente nunca recibe phase DONE.
+ * Ambos proxies apuntan al API Gateway (puerto 8080).
+ * El gateway enruta:
+ *   /docviz/**        → soporte-rag-mt (backend principal)
+ *   /security-auth/** → back-security
  */
 const longRunningApiProxy: ProxyOptions = {
   target: "http://127.0.0.1:8080",
@@ -28,7 +30,7 @@ const longRunningApiProxy: ProxyOptions = {
 };
 
 const securityProxy: ProxyOptions = {
-  target: "http://127.0.0.1:8081",
+  target: "http://127.0.0.1:8080",
   changeOrigin: true,
   rewrite: (p) => p.replace(/^\/security-api/, "/security-auth"),
 };
@@ -36,6 +38,11 @@ const securityProxy: ProxyOptions = {
 const apiProxy = {
   "/api": longRunningApiProxy,
   "/security-api": securityProxy,
+  "/s3-proxy": {
+    target: "http://127.0.0.1:4566",
+    changeOrigin: true,
+    rewrite: (p: string) => p.replace(/^\/s3-proxy/, ""),
+  },
 };
 
 export default defineConfig({

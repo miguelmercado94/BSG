@@ -18,4 +18,6 @@ public interface GestionarTareaCasoUso {
     Flux<TareaResponseDto> obtenerTareasPorUsuario(String codigoUsuario);
 
     Mono<TareaResponseDto> actualizarEstado(String codigoTarea, ActualizarEstadoTareaRequestDto request);
+
+    Mono<TareaResponseDto> obtenerTarea(String codigoTarea);
 }
