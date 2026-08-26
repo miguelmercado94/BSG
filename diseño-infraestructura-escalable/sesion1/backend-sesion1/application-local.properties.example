@@ -1,4 +1,0 @@
-# Copia este archivo a: backend-sesion1/application-local.properties
-# y descomenta / rellena (ese archivo está en .gitignore).
-#
-# Ejemplo: docviz.vector.chunk-size=900

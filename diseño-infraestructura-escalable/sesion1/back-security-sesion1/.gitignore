@@ -1,0 +1,18 @@
+# Secretos y entorno local (usar .env.example como plantilla)
+.env
+.env.local
+.env.*.local
+
+# Gradle / IDE (no versionar artefactos locales)
+.gradle/
+build/
+bin/
+out/
+.classpath
+.project
+.settings/
+.vscode/
+
+# Salida temporal de sesiones locales (Gradle bootRun redirigido, etc.)
+bootrun-out.txt
+bootrun-err.txt

@@ -41,9 +41,16 @@ variable "openai_api_key" {
   default     = ""
 }
 
+variable "mongodb_uri" {
+  type        = string
+  sensitive   = true
+  description = "MongoDB Connection URI for soporte-rag-mt"
+  default     = "mongodb://localhost:27017/soporte_rag"
+}
+
 locals {
-  backend_version       = chomp(trimspace(file("${path.module}/../sesion1/backend-sesion1/version.txt")))
-  backend_image         = "mmercado94/backend-sesion1:${local.backend_version}"
+  backend_version       = chomp(trimspace(file("${path.module}/../sesion1/soporte-rag-mt/version.txt")))
+  backend_image         = "mmercado94/soporte-rag-mt:${local.backend_version}"
   frontend_version      = chomp(trimspace(file("${path.module}/../sesion1/frontend-sesion1/version.txt")))
   frontend_image        = "mmercado94/frontend-sesion1:${local.frontend_version}"
 }
@@ -467,29 +474,21 @@ resource "aws_ecs_task_definition" "backend_task" {
     portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
     environment = [
       { name = "JAVA_TOOL_OPTIONS", value = "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+UseStringDeduplication" },
-      { name = "SPRING_PROFILES_ACTIVE", value = "pdn" },
+      { name = "SPRING_PROFILES_ACTIVE", value = "nube" },
       { name = "DATABASE_URL", value = "jdbc:postgresql://${aws_db_instance.postgres_bsg.endpoint}/docviz" },
       { name = "DATABASE_USER", value = "bsg_admin" },
       { name = "DATABASE_PASSWORD", value = "PasswordSeguro123" },
       { name = "OPENAI_API_KEY", value = var.openai_api_key },
       { name = "SPRING_AI_OPENAI_API_KEY", value = var.openai_api_key },
-      { name = "SPRING_AI_OPENAI_CHAT_API_KEY", value = var.openai_api_key },
-      { name = "SPRING_AI_OPENAI_EMBEDDING_API_KEY", value = var.openai_api_key },
-      { name = "OPENAI_CHAT_MODEL", value = "gpt-4o-mini" },
-      { name = "SPRING_AI_MODEL_EMBEDDING_TEXT", value = "openai" },
-      { name = "FIREBASE_ENABLED", value = "true" },
-      { name = "FIREBASE_PROJECT_ID", value = "sesion-bsg" },
-      # Misma ruta que Dockerfile (WORKDIR /app + COPY json). Ruta absoluta evita fallos si user.dir ≠ /app.
-      { name = "FIREBASE_CREDENTIALS_PATH", value = "/app/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
-      { name = "GOOGLE_APPLICATION_CREDENTIALS", value = "/app/sesion-bsg-firebase-adminsdk-fbsvc-25ee0429da.json" },
-      { name = "DOCVIZ_EMBEDDINGS_PROVIDER", value = "spring-ai" },
-      { name = "DOCVIZ_VECTOR_EMBEDDINGS_PROVIDER", value = "spring-ai" },
-      { name = "DOCVIZ_SUPPORT_ENABLED", value = "true" },
-      { name = "DOCVIZ_WORKSPACE_S3_ENABLED", value = "true" },
-      { name = "DOCVIZ_SUPPORT_S3_REGION", value = "us-east-1" },
-      { name = "DOCVIZ_SUPPORT_S3_BUCKET", value = aws_s3_bucket.soporte_bucket.bucket },
-      { name = "DOCVIZ_WORKSPACE_S3_BORRADOR_BUCKET", value = aws_s3_bucket.borradores_bucket.bucket },
-      { name = "DOCVIZ_WORKSPACE_S3_WORKAREA_BUCKET", value = aws_s3_bucket.workarea_bucket.bucket }
+      { name = "MONGODB_URI", value = var.mongodb_uri },
+      { name = "REDIS_HOST", value = aws_elasticache_cluster.redis_bsg.cache_nodes[0].address },
+      { name = "REDIS_PORT", value = "6379" },
+      { name = "SOPORTE_RAG_REDIS_ENABLED", value = "true" },
+      { name = "SOPORTE_RAG_S3_ENABLED", value = "true" },
+      { name = "SOPORTE_RAG_S3_REGION", value = "us-east-1" },
+      { name = "SOPORTE_RAG_S3_BUCKET_SOPORTE", value = aws_s3_bucket.soporte_bucket.bucket },
+      { name = "SOPORTE_RAG_S3_BUCKET_BORRADORES", value = aws_s3_bucket.borradores_bucket.bucket },
+      { name = "SOPORTE_RAG_S3_BUCKET_WORKAREA", value = aws_s3_bucket.workarea_bucket.bucket }
     ]
     logConfiguration = {
       logDriver = "awslogs"

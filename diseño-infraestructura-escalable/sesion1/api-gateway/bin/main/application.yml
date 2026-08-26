@@ -9,6 +9,12 @@ spring:
     gateway:
       # Rutas explicitas hacia los micros
       routes:
+        # back-security: /security-auth/**
+        - id: back-security
+          uri: ${SECURITY_SERVICE_URI:lb://back-security-sesion1}
+          predicates:
+            - Path=/security-auth/**
+
         # soporte-rag-mt (core): /docviz/**
         - id: soporte-rag-mt
           uri: ${SOPORTE_RAG_URI:lb://soporte-rag-mt}
@@ -39,6 +45,13 @@ spring:
             allowedHeaders: "*"
             allowCredentials: true
             maxAge: 3600
+
+# =========================================================================
+# Backend Security URI para validacion de tokens
+# =========================================================================
+bsg:
+  gateway:
+    security-service-uri: ${SECURITY_SERVICE_INTERNAL_URI:http://localhost:8081}
 
 # =========================================================================
 # Eureka Client — deshabilitado por defecto (local sin infra)

@@ -1,0 +1,53 @@
+# QA / integración: sin recrear esquema por arranque (init desactivado salvo override explícito).
+# Activación: --spring.profiles.active=qa
+
+spring:
+  sql:
+    init:
+      mode: ${SPRING_SQL_INIT_MODE:never}
+  r2dbc:
+    url: ${SPRING_R2DBC_URL}
+    username: ${SPRING_R2DBC_USERNAME}
+    password: ${SPRING_R2DBC_PASSWORD:}
+
+bsg:
+  security:
+    deployment: ${BSG_SECURITY_DEPLOYMENT:qa}
+    auth:
+      reset-password-base-url: ${BSG_SECURITY_AUTH_RESET_PASSWORD_BASE_URL:https://qa.example.invalid/reset-password}
+      recovery-token-expiry-minutes: ${BSG_SECURITY_AUTH_RECOVERY_TOKEN_EXPIRY_MINUTES:60}
+    aws:
+      dynamodb:
+        enabled: ${BSG_SECURITY_AWS_DYNAMODB_ENABLED:true}
+        endpoint: ${BSG_SECURITY_AWS_DYNAMODB_ENDPOINT:}
+        region: ${BSG_SECURITY_AWS_DYNAMODB_REGION:us-east-1}
+        revoked-tokens-table: ${BSG_SECURITY_AWS_DYNAMODB_REVOKED_TOKENS_TABLE:bsg_revoked_tokens}
+        create-table-if-not-exists: ${BSG_SECURITY_AWS_DYNAMODB_CREATE_TABLE_IF_NOT_EXISTS:false}
+    redis:
+      enabled: ${BSG_SECURITY_REDIS_ENABLED:true}
+      command-timeout-ms: ${BSG_SECURITY_REDIS_COMMAND_TIMEOUT_MS:300}
+      eviction-interval-ms: ${BSG_SECURITY_REDIS_EVICTION_INTERVAL_MS:3600000}
+      key-prefix: ${BSG_SECURITY_REDIS_KEY_PREFIX:bsg:revoked:}
+
+management:
+  health:
+    redis:
+      enabled: true
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: INFO
+    com.bsg.security: INFO
+    com.bsg.security.config.security.authentication.filter: INFO
+    com.bsg.security.application.service.impl.UsuarioServiceImpl: INFO
+    com.bsg.security.application.usecase.impl.RequestPasswordRecoveryUseCaseImpl: INFO
+    com.bsg.security.application.usecase.impl.ResetPasswordUseCaseImpl: INFO
+    com.bsg.security.infrastructure.adapter.persistence: INFO
+    com.bsg.security.infrastructure.adapter.cache: INFO
+    org.springframework.security: INFO
+    org.springframework.r2dbc.core: WARN
+    org.springframework.data.r2dbc: WARN
+    io.r2dbc: WARN
