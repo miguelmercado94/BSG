@@ -87,37 +87,43 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                             ? construirContextoDesdeReferencias(tarea, referencias)
                             : Mono.just("");
 
-                    // 2. Analizar intención
-                    return chatServicio.analizar(codigoTarea + "_analisis", request.getMensaje(), "")
-                            .flatMap(analisis -> {
-                                
-                                Mono<String> respuestaIAMono;
-                                if (analisis.isRequiereProcesamientoProfundo() || !referencias.isEmpty()) {
-                                    
-                                    Mono<String> contextoRagMono = (analisis.isRequiereRag() || !referencias.isEmpty())
-                                            ? servicioBusquedaVectorial.buscarContexto(tarea.getUrlRepo(), request.getMensaje(), vectorPropiedades.ragTopK())
-                                                .map(CoincidenciaVectorial::texto)
-                                                .collect(Collectors.joining("\n---\n"))
-                                                .defaultIfEmpty("No se encontró información en la base de datos de conocimiento.")
-                                            : Mono.just("");
-                                    
-                                    Mono<String> contextoHistorialMono = analisis.isRequiereHistorialChat()
-                                            ? construirContextoHistorial(tarea)
-                                            : Mono.just("");
+                    // 2. Analizar intención con herramientas y URLs disponibles
+                    return obtenerHerramientasDisponibles(tarea)
+                            .flatMap(tools -> chatServicio.analizar(codigoTarea + "_analisis", request.getMensaje(), tools)
+                                    .flatMap(analisis -> {
+                                        
+                                        Mono<String> respuestaIAMono;
+                                        if (analisis.isRequiereProcesamientoProfundo() || !referencias.isEmpty() || StringUtils.hasText(tools)) {
+                                            
+                                            Mono<String> contextoRagMono = (analisis.isRequiereRag() || !referencias.isEmpty())
+                                                    ? servicioBusquedaVectorial.buscarContexto(tarea.getUrlRepo(), request.getMensaje(), vectorPropiedades.ragTopK())
+                                                        .map(CoincidenciaVectorial::texto)
+                                                        .collect(Collectors.joining("\n---\n"))
+                                                        .defaultIfEmpty("No se encontró información en la base de datos de conocimiento.")
+                                                    : Mono.just("");
+                                            
+                                            Mono<String> contextoHistorialMono = analisis.isRequiereHistorialChat()
+                                                    ? construirContextoHistorial(tarea)
+                                                    : Mono.just("");
 
-                                    respuestaIAMono = Mono.zip(contextoRagMono, contextoDeReferencias, contextoHistorialMono)
-                                            .flatMap(tuple -> {
-                                                String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), tuple.getT3()).trim();
-                                                return chatServicio.conversar(codigoTarea, request.getMensaje(), contextoFinal);
-                                            });
+                                            respuestaIAMono = Mono.zip(contextoRagMono, contextoDeReferencias, contextoHistorialMono)
+                                                    .flatMap(tuple -> {
+                                                        String contextoTools = StringUtils.hasText(tools)
+                                                                ? "Herramientas y documentación web disponibles para consulta en línea:\n" + tools
+                                                                : "";
+                                                        String contextoFinal = java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3(), contextoTools)
+                                                                .filter(s -> s != null && !s.isBlank())
+                                                                .collect(Collectors.joining("\n\n"));
+                                                        return chatServicio.conversar(codigoTarea, request.getMensaje(), contextoFinal);
+                                                    });
 
-                                } else {
-                                    respuestaIAMono = chatServicio.conversarDirecto(codigoTarea, request.getMensaje());
-                                }
+                                        } else {
+                                            respuestaIAMono = chatServicio.conversarDirecto(codigoTarea, request.getMensaje());
+                                        }
 
-                                return respuestaIAMono.flatMap(respuestaIA -> 
-                                        guardarMensaje(tarea, request.getMensaje(), respuestaIA));
-                            });
+                                        return respuestaIAMono.flatMap(respuestaIA -> 
+                                                guardarMensaje(tarea, request.getMensaje(), respuestaIA));
+                                    }));
                 })
                 .map(tareaDtoMapper::aDto);
     }

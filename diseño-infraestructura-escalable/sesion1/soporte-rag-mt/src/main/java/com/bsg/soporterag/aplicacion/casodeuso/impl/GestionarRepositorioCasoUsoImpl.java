@@ -76,8 +76,17 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
         if (CollectionUtils.isEmpty(request.getTags())) {
             tagsValidadosMono = Mono.just(new ArrayList<>());
         } else {
-            tagsValidadosMono = tagServicio.obtenerTagsPorNombres(request.getTags().toArray(new String[0]))
-                    .map(Tag::getTag)
+            tagsValidadosMono = Flux.fromIterable(request.getTags())
+                    .map(String::trim)
+                    .filter(StringUtils::hasText)
+                    .distinct()
+                    .flatMap(nombreTag -> tagServicio.obtenerTagPorNombre(nombreTag)
+                            .map(Tag::getTag)
+                            .switchIfEmpty(
+                                    tagServicio.crearTag(new Tag(null, nombreTag, "Tag asignado a repositorio", true, new ArrayList<>()))
+                                            .onErrorResume(e -> tagServicio.obtenerTagPorNombre(nombreTag))
+                                            .map(Tag::getTag)
+                            ))
                     .collectList();
         }
 
@@ -223,11 +232,28 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
         String urlClave = normalizarUrl(request.getUrl());
         log.info("Actualizacion repositorio iniciada | url={}", urlClave);
 
+        Mono<List<String>> tagsMono = (request.getTags() != null)
+                ? Flux.fromIterable(request.getTags())
+                        .map(String::trim)
+                        .filter(StringUtils::hasText)
+                        .distinct()
+                        .flatMap(nombreTag -> tagServicio.obtenerTagPorNombre(nombreTag)
+                                .map(Tag::getTag)
+                                .switchIfEmpty(
+                                        tagServicio.crearTag(new Tag(null, nombreTag, "Tag asignado a repositorio", true, new ArrayList<>()))
+                                                .onErrorResume(e -> tagServicio.obtenerTagPorNombre(nombreTag))
+                                                .map(Tag::getTag)
+                                ))
+                        .collectList()
+                : Mono.empty();
+
         return repositorioServicio.obtenerRepo(urlClave)
                 .flatMap(existente -> {
-                    // Actualizar tags si vienen en el request
                     if (request.getTags() != null) {
-                        existente.setTags(request.getTags());
+                        return tagsMono.flatMap(tagsList -> {
+                            existente.setTags(tagsList);
+                            return actualizarDescripcion(existente, request.getDescripcion());
+                        });
                     }
                     return actualizarDescripcion(existente, request.getDescripcion());
                 })

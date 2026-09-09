@@ -4111,3 +4111,307 @@ textarea {
   align-items: flex-start;
   gap: 0.5rem;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Tag Selector, Online URL Tools & Custom Tag Form
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.admin-repo-edit-modal {
+  max-width: min(94vw, 44rem) !important;
+  width: min(94vw, 44rem) !important;
+  max-height: min(92vh, 48rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.admin-repo-edit-modal__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0.75rem;
+}
+
+.admin-cell-editor__repo-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  align-items: center;
+}
+
+.admin-cell-editor__repo-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.admin-tags-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.admin-tags-section__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.admin-tags-section__title-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.admin-tags-section__label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.admin-tags-section__badge {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.admin-tags-section__hint {
+  margin: 0;
+  line-height: 1.4;
+  color: #94a3b8;
+}
+
+.admin-tags-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  background: rgba(30, 41, 59, 0.4);
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  font-size: 0.82rem;
+}
+
+.admin-tags-empty__icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.admin-tags-chips-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.admin-tag-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  transition: all 0.18s ease;
+}
+
+.admin-tag-card:hover {
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.admin-tag-card--selected {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: #3b82f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+.admin-tag-card__main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.65rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.admin-tag-card__checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: bold;
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  transition: all 0.15s ease;
+}
+
+.admin-tag-card__checkbox--checked {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.admin-tag-card__name {
+  font-size: 0.84rem;
+  color: #f1f5f9;
+}
+
+.admin-tag-card__tool-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.admin-tag-card__toggle-tools {
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: #94a3b8;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.65rem;
+  cursor: pointer;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.15s ease;
+}
+
+.admin-tag-card__toggle-tools:hover {
+  color: #60a5fa;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.admin-tag-tools-drawer {
+  padding: 0.5rem 0.65rem;
+  background: rgba(15, 23, 42, 0.8);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.admin-tag-tools-drawer__title {
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+  color: #93c5fd;
+}
+
+.admin-tag-tools-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.admin-tag-tool-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+}
+
+.admin-tag-tool-bullet {
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.admin-tag-tool-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  overflow: hidden;
+}
+
+.admin-tag-tool-link {
+  color: #60a5fa;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.admin-tag-tool-link:hover {
+  color: #93c5fd;
+}
+
+.admin-custom-tag-box {
+  margin-top: 0.35rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.45);
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.admin-custom-tag-box__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.admin-custom-tag-box__title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.admin-custom-tag-box__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.6rem;
+}
+
+.admin-custom-tag-box__field {
+  margin-bottom: 0;
+}
+
+.admin-custom-tag-box__field span {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  margin-bottom: 0.2rem;
+}
+
+.admin-custom-tag-box__field input {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+}
+
+.admin-custom-tag-box__alert {
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
+.admin-custom-tag-box__alert--success {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+}
+
+.admin-custom-tag-box__alert--error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.admin-custom-tag-box__actions {
+  display: flex;
+  justify-content: flex-end;
+}

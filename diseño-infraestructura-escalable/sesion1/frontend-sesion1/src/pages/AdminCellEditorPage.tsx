@@ -22,6 +22,9 @@ import {
   adminUpdatePendingSupportMarkdown,
   adminUploadCellSupportMarkdown,
   adminUploadPendingSupportMarkdown,
+  addTagTool,
+  createTag,
+  fetchAllTags,
   fetchCellRepos,
   fetchCells,
   fetchRepoBranches,
@@ -35,6 +38,7 @@ import {
   parseGitRepoNameFromHttpsUrl,
   updateRepo,
 } from "../api/client";
+import type { TagDetail } from "../api/client";
 import type {
   CellRepoResponse,
   CellResponse,
@@ -220,6 +224,25 @@ export function AdminCellEditorPage() {
   const [tagCatalog, setTagCatalog] = useState<TagsResponse | null>(null);
   /** Evita sobrescribir tags antes de terminar GET /tags al abrir el panel. */
   const [tagsCatalogReady, setTagsCatalogReady] = useState(false);
+
+  /** Todos los tags con sus herramientas y descripciones (GET /api/v1/tags). */
+  const [allTags, setAllTags] = useState<TagDetail[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(false);
+
+  /** Formulario para agregar tag personalizado */
+  const [customTagName, setCustomTagName] = useState("");
+  const [customTagDesc, setCustomTagDesc] = useState("");
+  const [customTagUrl, setCustomTagUrl] = useState("");
+  const [customTagUrlCtx, setCustomTagUrlCtx] = useState("");
+  const [customTagBusy, setCustomTagBusy] = useState(false);
+  const [customTagMsg, setCustomTagMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  /** Formulario inline para ver y agregar URLs a tags */
+  const [expandedTagTools, setExpandedTagTools] = useState<string | null>(null);
+  const [addToolTagName, setAddToolTagName] = useState<string | null>(null);
+  const [addToolUrl, setAddToolUrl] = useState("");
+  const [addToolCtx, setAddToolCtx] = useState("");
+  const [addToolBusy, setAddToolBusy] = useState(false);
   const [repoUser, setRepoUser] = useState("");
   const [repoToken, setRepoToken] = useState("");
   const [hintReuse, setHintReuse] = useState(false);
@@ -317,36 +340,46 @@ export function AdminCellEditorPage() {
     }
   }, [viewer]);
 
-  useEffect(() => {
-    if (!showRepoForm) {
-      setTagsCatalogReady(false);
-      return;
+  const reloadTags = useCallback(async () => {
+    setTagsLoading(true);
+    try {
+      const [list, catalog] = await Promise.all([
+        fetchAllTags(),
+        fetchTags(),
+      ]);
+      setAllTags(list);
+      setTagCatalog(catalog);
+      setTagsCatalogReady(true);
+      return { list, catalog };
+    } catch (e) {
+      console.error("Error cargando catálogo de tags:", e);
+    } finally {
+      setTagsLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    void reloadTags();
+  }, [reloadTags]);
+
+  useEffect(() => {
+    if (!showRepoForm) return;
     let cancelled = false;
-    void fetchTags()
-      .then((res) => {
-        if (cancelled) return;
-        setTagCatalog(res);
-        const { preset, extra } = splitTagsForCatalog(repoTags, res.tags);
-        setRepoTagPresetSelected(preset);
-        setRepoTagsExtra(extra);
-        setRepoTags(computeTagsCsv(preset, extra));
-        setTagsCatalogReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) setTagsCatalogReady(true);
-      });
+    void reloadTags().then((res) => {
+      if (cancelled || !res) return;
+      const { preset, extra } = splitTagsForCatalog(repoTags, res.catalog.tags);
+      setRepoTagPresetSelected(preset);
+      setRepoTagsExtra(extra);
+    });
     return () => {
       cancelled = true;
     };
-    // Solo al abrir el panel; repoTags es la instantánea de ese render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshot intencional al abrir «Agregar repositorio»
-  }, [showRepoForm]);
+  }, [showRepoForm, reloadTags]);
 
   useEffect(() => {
-    if (!showRepoForm || !tagsCatalogReady) return;
+    if (!tagsCatalogReady) return;
     setRepoTags(computeTagsCsv(repoTagPresetSelected, repoTagsExtra));
-  }, [repoTagPresetSelected, repoTagsExtra, showRepoForm, tagsCatalogReady]);
+  }, [repoTagPresetSelected, repoTagsExtra, tagsCatalogReady]);
 
   useEffect(() => {
     if (!getUserId().trim()) {
@@ -663,6 +696,71 @@ export function AdminCellEditorPage() {
     }
   }
 
+  async function handleCreateCustomTag(target: "modal" | "addRepo") {
+    const tagName = customTagName.trim().toLowerCase();
+    if (!tagName) {
+      setCustomTagMsg({ type: "error", text: "El nombre del tag es obligatorio." });
+      return;
+    }
+    setCustomTagBusy(true);
+    setCustomTagMsg(null);
+    try {
+      const toolsToSend: Array<{ urlTool: string; contextoUrl: string }> = [];
+      if (customTagUrl.trim()) {
+        toolsToSend.push({
+          urlTool: customTagUrl.trim(),
+          contextoUrl: customTagUrlCtx.trim() || tagName,
+        });
+      }
+
+      await createTag({
+        tag: tagName,
+        descripcionTag: customTagDesc.trim() || undefined,
+        herramientasUrls: toolsToSend.length > 0 ? toolsToSend : undefined,
+      });
+
+      // Recargar catálogo y lista
+      await reloadTags();
+
+      // Vincular inmediatamente al repo que se está editando o creando
+      if (target === "modal") {
+        setEditRepoTags((prev) => new Set([...prev, tagName]));
+      } else {
+        setRepoTagPresetSelected((prev) => new Set([...prev, tagName]));
+      }
+
+      setCustomTagName("");
+      setCustomTagDesc("");
+      setCustomTagUrl("");
+      setCustomTagUrlCtx("");
+      setCustomTagMsg({ type: "success", text: `Tag «${tagName}» creado y enlazado al repositorio.` });
+      setTimeout(() => setCustomTagMsg(null), 4000);
+    } catch (err) {
+      setCustomTagMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setCustomTagBusy(false);
+    }
+  }
+
+  async function handleAddUrlToTag(tagName: string) {
+    if (!addToolUrl.trim()) return;
+    setAddToolBusy(true);
+    try {
+      await addTagTool(tagName, addToolUrl.trim(), addToolCtx.trim() || tagName);
+      setAddToolUrl("");
+      setAddToolCtx("");
+      setAddToolTagName(null);
+      await reloadTags();
+    } catch (err) {
+      alert("Error agregando URL: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setAddToolBusy(false);
+    }
+  }
+
   async function openEditRepoModal(r: CellRepoResponse) {
     setEditingRepo(r);
     setEditRepoSelectedBranch(r.ramaPrincipal || "");
@@ -672,12 +770,11 @@ export function AdminCellEditorPage() {
     setEditRepoTags(new Set(currentTags));
     setEditRepoBranches([]);
     setEditRepoBranchesLoading(true);
+    setCustomTagMsg(null);
+    setExpandedTagTools(null);
+    setAddToolTagName(null);
     try {
-      // Ensure tag catalog is loaded
-      if (!tagCatalog || tagCatalog.tags.length === 0) {
-        const cats = await fetchTags();
-        setTagCatalog(cats);
-      }
+      void reloadTags();
       const branches = await fetchRepoBranches(r.repositoryUrl);
       setEditRepoBranches(branches);
       if (!r.ramaPrincipal && branches.length > 0) {
@@ -688,6 +785,252 @@ export function AdminCellEditorPage() {
     } finally {
       setEditRepoBranchesLoading(false);
     }
+  }
+
+  function renderTagSection(
+    selectedTags: Set<string>,
+    setSelectedTags: React.Dispatch<React.SetStateAction<Set<string>>>,
+    targetMode: "modal" | "addRepo"
+  ) {
+    return (
+      <div className="admin-tags-section">
+        <div className="admin-tags-section__header">
+          <div className="admin-tags-section__title-group">
+            <span className="admin-tags-section__label">Etiquetas del repositorio (Tags)</span>
+            <span className="admin-tags-section__badge">
+              {selectedTags.size} {selectedTags.size === 1 ? "seleccionado" : "seleccionados"}
+            </span>
+          </div>
+          <p className="muted small admin-tags-section__hint">
+            Haz clic en un tag para vincularlo o desvincularlo de este repositorio. Las URLs asociadas a los tags permiten al asistente chatear consultando documentación técnica en línea.
+          </p>
+        </div>
+
+        {/* Lista de tags existentes */}
+        <div className="admin-tags-section__list-wrap">
+          {tagsLoading && allTags.length === 0 ? (
+            <p className="muted small">Cargando tags…</p>
+          ) : allTags.length === 0 ? (
+            <div className="admin-tags-empty">
+              <span className="admin-tags-empty__icon">🏷️</span>
+              <div>
+                <strong>No hay tags registrados aún en el sistema.</strong>
+                <p className="muted small">
+                  Utiliza el formulario a continuación para agregar un tag personalizado y asignarle una URL de documentación técnica.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="admin-tags-chips-grid">
+              {allTags.map((t) => {
+                const isSelected = Array.from(selectedTags).some(
+                  (st) => st.toLowerCase() === t.tag.toLowerCase()
+                );
+                const hasTools = (t.herramientasUrls?.length ?? 0) > 0;
+                const isExpanded = expandedTagTools === t.tag;
+
+                return (
+                  <div
+                    key={t.tag}
+                    className={`admin-tag-card ${isSelected ? "admin-tag-card--selected" : ""}`}
+                  >
+                    <div
+                      className="admin-tag-card__main"
+                      onClick={() => {
+                        setSelectedTags((prev) => {
+                          const next = new Set(prev);
+                          if (isSelected) {
+                            for (const item of next) {
+                              if (item.toLowerCase() === t.tag.toLowerCase()) next.delete(item);
+                            }
+                          } else {
+                            next.add(t.tag);
+                          }
+                          return next;
+                        });
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      title={isSelected ? `Clic para desvincular «${t.tag}»` : `Clic para vincular «${t.tag}» al repo`}
+                    >
+                      <span className={`admin-tag-card__checkbox ${isSelected ? "admin-tag-card__checkbox--checked" : ""}`}>
+                        {isSelected ? "✓" : "+"}
+                      </span>
+                      <strong className="admin-tag-card__name">{t.tag}</strong>
+                      {hasTools ? (
+                        <span className="admin-tag-card__tool-badge" title={`${t.herramientasUrls.length} URL(s) de consulta en línea`}>
+                          🌐 {t.herramientasUrls.length}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* Botón para ver/ocultar URLs */}
+                    {hasTools && (
+                      <button
+                        type="button"
+                        className="admin-tag-card__toggle-tools"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedTagTools(isExpanded ? null : t.tag);
+                        }}
+                        title={isExpanded ? "Ocultar URLs" : "Ver URLs de consulta en línea"}
+                      >
+                        {isExpanded ? "▲ Ocultar URLs" : "▼ Ver URLs"}
+                      </button>
+                    )}
+
+                    {/* Desplegable de URLs del tag */}
+                    {isExpanded && (
+                      <div className="admin-tag-tools-drawer">
+                        <p className="admin-tag-tools-drawer__title small">URLs de consulta en línea (@tools):</p>
+                        <ul className="admin-tag-tools-list">
+                          {t.herramientasUrls.map((h, i) => (
+                            <li key={i} className="admin-tag-tool-item">
+                              <span className="admin-tag-tool-bullet">🔗</span>
+                              <div className="admin-tag-tool-details">
+                                <a
+                                  href={h.urlTool}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="admin-tag-tool-link"
+                                >
+                                  {h.urlTool}
+                                </a>
+                                {h.contextoUrl && (
+                                  <span className="muted small">{h.contextoUrl}</span>
+                                )}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+
+                        {addToolTagName === t.tag ? (
+                          <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                            <input
+                              type="url"
+                              placeholder="https://..."
+                              value={addToolUrl}
+                              onChange={(e) => setAddToolUrl(e.target.value)}
+                              style={{ fontSize: "0.75rem", padding: "0.25rem 0.4rem" }}
+                            />
+                            <input
+                              type="text"
+                              placeholder="Descripción o contexto de la URL..."
+                              value={addToolCtx}
+                              onChange={(e) => setAddToolCtx(e.target.value)}
+                              style={{ fontSize: "0.75rem", padding: "0.25rem 0.4rem" }}
+                            />
+                            <div style={{ display: "flex", gap: "0.3rem", justifyContent: "flex-end" }}>
+                              <button
+                                type="button"
+                                className="btn btn--sm"
+                                onClick={() => setAddToolTagName(null)}
+                                style={{ fontSize: "0.72rem", padding: "0.2rem 0.4rem" }}
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="button"
+                                className="btn primary btn--sm"
+                                disabled={addToolBusy || !addToolUrl.trim()}
+                                onClick={() => void handleAddUrlToTag(t.tag)}
+                                style={{ fontSize: "0.72rem", padding: "0.2rem 0.4rem" }}
+                              >
+                                {addToolBusy ? "Guardando…" : "Guardar URL"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn--sm"
+                            style={{ marginTop: "0.4rem", fontSize: "0.72rem", padding: "0.15rem 0.4rem" }}
+                            onClick={() => {
+                              setAddToolTagName(t.tag);
+                              setAddToolUrl("");
+                              setAddToolCtx("");
+                            }}
+                          >
+                            + Agregar otra URL a este tag
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Formulario para agregar tag personalizado */}
+        <div className="admin-custom-tag-box">
+          <div className="admin-custom-tag-box__head">
+            <span className="admin-custom-tag-box__title">➕ Agregar tag personalizado con consulta en línea</span>
+          </div>
+
+          <div className="admin-custom-tag-box__grid">
+            <div className="field admin-custom-tag-box__field">
+              <span>Nombre del tag *</span>
+              <input
+                type="text"
+                placeholder="ej. aws, arquitectura, spring..."
+                value={customTagName}
+                onChange={(e) => setCustomTagName(e.target.value)}
+                disabled={customTagBusy}
+              />
+            </div>
+            <div className="field admin-custom-tag-box__field">
+              <span>Descripción (opcional)</span>
+              <input
+                type="text"
+                placeholder="ej. Documentación de servicios cloud"
+                value={customTagDesc}
+                onChange={(e) => setCustomTagDesc(e.target.value)}
+                disabled={customTagBusy}
+              />
+            </div>
+            <div className="field admin-custom-tag-box__field">
+              <span>URL para consultas en línea</span>
+              <input
+                type="url"
+                placeholder="https://docs.aws.amazon.com/..."
+                value={customTagUrl}
+                onChange={(e) => setCustomTagUrl(e.target.value)}
+                disabled={customTagBusy}
+              />
+            </div>
+            <div className="field admin-custom-tag-box__field">
+              <span>Contexto o descripción de la URL</span>
+              <input
+                type="text"
+                placeholder="ej. Documentación oficial AWS"
+                value={customTagUrlCtx}
+                onChange={(e) => setCustomTagUrlCtx(e.target.value)}
+                disabled={customTagBusy}
+              />
+            </div>
+          </div>
+
+          {customTagMsg && (
+            <div className={`admin-custom-tag-box__alert admin-custom-tag-box__alert--${customTagMsg.type}`}>
+              {customTagMsg.text}
+            </div>
+          )}
+
+          <div className="admin-custom-tag-box__actions">
+            <button
+              type="button"
+              className="btn primary btn--sm"
+              disabled={customTagBusy || !customTagName.trim()}
+              onClick={() => void handleCreateCustomTag(targetMode)}
+            >
+              {customTagBusy ? "Creando…" : "+ Crear y enlazar al repositorio"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   async function submitEditRepo() {
@@ -1091,6 +1434,17 @@ export function AdminCellEditorPage() {
                                   · omitidos: {summarizeSkippedPaths(r.lastIngestSkipped)}
                                 </span>
                               )}
+                              <div className="admin-cell-editor__repo-tags">
+                                {r.tagsCsv && r.tagsCsv.trim().length > 0 ? (
+                                  r.tagsCsv.split(",").map((t) => t.trim()).filter(Boolean).map((t) => (
+                                    <span key={t} className="admin-cell-editor__repo-tag-pill">
+                                      🏷️ {t}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="muted small" style={{ fontStyle: "italic", fontSize: "0.72rem" }}>Sin tags</span>
+                                )}
+                              </div>
                             </span>
                             <span className="admin-cell-editor__row-actions">
                               <button
@@ -1252,45 +1606,7 @@ export function AdminCellEditorPage() {
                             <span className="muted small">Datos reutilizados del repositorio ya registrado.</span>
                           )}
                         </label>
-                        <label className="field">
-                          <span>Etiquetas (catálogo)</span>
-                          <p className="muted small" style={{ margin: "0 0 0.5rem" }}>
-                            Rombo = uno o varios; opcional: otras etiquetas debajo. El backend usa estos tags para sugerir URLs de
-                            documentación (@tools) en el chat RAG.
-                          </p>
-                          <div
-                            className="admin-repo-form__tag-rhombs"
-                            role="group"
-                            aria-label="Etiquetas del catálogo DocViz"
-                          >
-                            {(tagCatalog?.tags ?? []).map((tag) => (
-                              <button
-                                key={tag}
-                                type="button"
-                                className={
-                                  "admin-repo-form__tag-rhomb" +
-                                  (repoTagPresetSelected.has(tag) ? " admin-repo-form__tag-rhomb--on" : "")
-                                }
-                                title={
-                                  tagCatalog?.toolsByTag?.[tag]
-                                    ?.map((t) => `${t.title} (${t.url})`)
-                                    .join(" · ") ?? tag
-                                }
-                                aria-pressed={repoTagPresetSelected.has(tag)}
-                                onClick={() => {
-                                  setRepoTagPresetSelected((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(tag)) next.delete(tag);
-                                    else next.add(tag);
-                                    return next;
-                                  });
-                                }}
-                              >
-                                <span className="admin-repo-form__tag-rhomb-inner">{tag}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </label>
+                        {renderTagSection(repoTagPresetSelected, setRepoTagPresetSelected, "addRepo")}
                         <button
                           type="button"
                           className="btn primary admin-repo-form__add-to-list"
@@ -1855,7 +2171,7 @@ export function AdminCellEditorPage() {
           onClick={() => !editRepoSaving && setEditingRepo(null)}
         >
           <div
-            className="modal-card card"
+            className="modal-card card admin-repo-edit-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="edit-repo-modal-title"
@@ -1864,87 +2180,48 @@ export function AdminCellEditorPage() {
             <h2 id="edit-repo-modal-title" className="h3">
               Editar repositorio
             </h2>
-            <label className="field">
-              <span>URL</span>
-              <input value={editingRepo.repositoryUrl} readOnly disabled />
-            </label>
-            <label className="field">
-              <span>Rama</span>
-              {editRepoBranchesLoading ? (
-                <input value="Cargando ramas…" readOnly disabled />
-              ) : (
-                <select
-                  value={editRepoSelectedBranch}
-                  onChange={(ev) => setEditRepoSelectedBranch(ev.target.value)}
-                >
-                  {editRepoBranches.length === 0 && (
-                    <option value={editRepoSelectedBranch || ""}>
-                      {editRepoSelectedBranch || "(sin ramas disponibles)"}
-                    </option>
-                  )}
-                  {editRepoBranches.map((b) => (
-                    <option key={b.nombre} value={b.nombre}>
-                      {b.nombre} ({b.commit.substring(0, 7)})
-                    </option>
-                  ))}
-                </select>
-              )}
-            </label>
-            <label className="field">
-              <span>Nombre</span>
-              <input value={editingRepo.displayName} readOnly disabled />
-            </label>
-            <label className="field">
-              <span>Namespace vectorial</span>
-              <input
-                value={editRepoNamespace}
-                readOnly
-                disabled
-              />
-            </label>
-            <label className="field">
-              <span>Etiquetas</span>
-              <div
-                className="admin-repo-form__tag-rhombs"
-                role="group"
-                aria-label="Etiquetas del repositorio"
-              >
-                {(tagCatalog?.tags ?? []).map((tag) => {
-                  const isSelected = Array.from(editRepoTags).some((t) => t.toLowerCase() === tag.toLowerCase());
-                  return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={
-                      "admin-repo-form__tag-rhomb" +
-                      (isSelected ? " admin-repo-form__tag-rhomb--on" : "")
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditRepoTags((prev) => {
-                        const next = new Set(prev);
-                        if (isSelected) {
-                          // Remove (case-insensitive)
-                          for (const t of next) {
-                            if (t.toLowerCase() === tag.toLowerCase()) next.delete(t);
-                          }
-                        } else {
-                          next.add(tag);
-                        }
-                        return next;
-                      });
-                    }}
-                    title={tag}
+            <div className="admin-repo-edit-modal__fields">
+              <label className="field">
+                <span>URL</span>
+                <input value={editingRepo.repositoryUrl} readOnly disabled />
+              </label>
+              <label className="field">
+                <span>Rama</span>
+                {editRepoBranchesLoading ? (
+                  <input value="Cargando ramas…" readOnly disabled />
+                ) : (
+                  <select
+                    value={editRepoSelectedBranch}
+                    onChange={(ev) => setEditRepoSelectedBranch(ev.target.value)}
                   >
-                    <span className="admin-repo-form__tag-rhomb-inner">{tag}</span>
-                  </button>
-                  );
-                })}
-                {(tagCatalog?.tags ?? []).length === 0 && (
-                  <span className="muted small">No hay tags configurados.</span>
+                    {editRepoBranches.length === 0 && (
+                      <option value={editRepoSelectedBranch || ""}>
+                        {editRepoSelectedBranch || "(sin ramas disponibles)"}
+                      </option>
+                    )}
+                    {editRepoBranches.map((b) => (
+                      <option key={b.nombre} value={b.nombre}>
+                        {b.nombre} ({b.commit.substring(0, 7)})
+                      </option>
+                    ))}
+                  </select>
                 )}
-              </div>
-            </label>
+              </label>
+              <label className="field">
+                <span>Nombre</span>
+                <input value={editingRepo.displayName} readOnly disabled />
+              </label>
+              <label className="field">
+                <span>Namespace vectorial</span>
+                <input
+                  value={editRepoNamespace}
+                  readOnly
+                  disabled
+                />
+              </label>
+            </div>
+
+            {renderTagSection(editRepoTags, setEditRepoTags, "modal")}
             <div className="admin-cell-editor__modal-actions">
               <button
                 type="button"
