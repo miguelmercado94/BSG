@@ -49,7 +49,7 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
         String path = request.getPath().pathWithinApplication().value();
 
         // 1. Rutas de auth pasan directo (el micro security se protege internamente)
-        if (path.startsWith("/security-auth")) {
+        if (path.startsWith("/security-auth") || path.startsWith("/api/auth")) {
             return chain.filter(exchange);
         }
 

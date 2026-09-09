@@ -1,4 +1,4 @@
-# BSG API Gateway — Spring Cloud Gateway + Eureka Client
+# BSG API Gateway — Spring Cloud Gateway (Multi-stage Temurin JRE Alpine)
 FROM gradle:8.14-jdk21 AS builder
 WORKDIR /workspace
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
@@ -21,4 +21,4 @@ USER spring:spring
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["sh", "-c", "exec java ${JAVA_OPTS:-} -jar /app/app.jar"]

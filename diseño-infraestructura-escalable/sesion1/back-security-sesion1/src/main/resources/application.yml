@@ -25,7 +25,7 @@ spring:
       connect-timeout: ${SPRING_DATA_REDIS_CONNECT_TIMEOUT:500ms}
 
 server:
-  port: 8081
+  port: ${PORT:8080}
 
 management:
   endpoints:

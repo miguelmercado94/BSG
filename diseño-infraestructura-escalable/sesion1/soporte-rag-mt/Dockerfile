@@ -2,27 +2,22 @@
 FROM maven:3.9-eclipse-temurin-21 AS builder
 WORKDIR /app
 COPY pom.xml .
-# Descargar dependencias para cachear
 RUN mvn dependency:go-offline -B
 COPY src ./src
-# Compilar el proyecto y saltar tests para agilizar el build de la imagen
-RUN mvn clean package -Plocal -DskipTests
+RUN mvn clean package -DskipTests
 
-# Etapa 2: Ejecución
-FROM eclipse-temurin:21-jre-jammy
+# Etapa 2: Ejecución ultra-ligera (Alpine)
+FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN addgroup -S spring -g 1000 && adduser -S spring -u 1000 -G spring \
+    && apk add --no-cache curl \
+    && rm -rf /var/cache/apk/*
 
-# Copiar el jar generado desde la etapa builder
 COPY --from=builder /app/target/*.jar app.jar
 
-# Variable de entorno por defecto para el perfil
-ENV SPRING_PROFILES_ACTIVE=local
+USER spring:spring
 
-# Exponer el puerto de la aplicación (asumiendo que usa el 8080)
 EXPOSE 8080
 
-# El entrypoint usa la variable de entorno SPRING_PROFILES_ACTIVE
-# Para correr con perfil 'nube': docker run -e SPRING_PROFILES_ACTIVE=nube <imagen>
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["sh", "-c", "exec java ${JAVA_OPTS:-} -jar app.jar"]
