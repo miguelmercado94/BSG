@@ -4,8 +4,11 @@
 **Curso:** AI Project / AI Data Engineer — BSG Institute  
 **Autor:** Miguel Ángel Mercado Tirado  
 **Fecha:** Septiembre 2026  
-**Repositorio Base de Demostración:** [`https://github.com/miguelmercado94/awscore.git`](https://github.com/miguelmercado94/awscore.git)  
-**URL de la Aplicación en Producción (Frontend):** [https://frontend-production-e39d6.up.railway.app/](https://frontend-production-e39d6.up.railway.app/)
+**Repositorio del Proyecto (Código Fuente):** [`https://github.com/miguelmercado94/BSG.git`](https://github.com/miguelmercado94/BSG.git)  
+**Rama de Despliegue / Producción:** `deploy-railway`  
+**Repositorio Base de Demostración (Indexación):** [`https://github.com/miguelmercado94/awscore.git`](https://github.com/miguelmercado94/awscore.git) (Rama: `main`)  
+**URL de la Aplicación en Producción (Frontend):** [https://frontend-production-e39d6.up.railway.app/](https://frontend-production-e39d6.up.railway.app/)  
+**URL del API Gateway (HTTPS / WSS):** [https://api-gateway-production-867c.up.railway.app](https://api-gateway-production-867c.up.railway.app)
 
 ---
 
