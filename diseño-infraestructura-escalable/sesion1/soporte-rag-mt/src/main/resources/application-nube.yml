@@ -21,10 +21,17 @@ spring:
         text: openai
   data:
     redis:
-      host: ${REDIS_HOST:}
+      host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:500ms}
       ssl:
         enabled: ${REDIS_SSL:false}
+  management:
+    health:
+      redis:
+        enabled: false
   datasource:
     hikari:
       maximum-pool-size: ${HIKARI_MAX_POOL:12}

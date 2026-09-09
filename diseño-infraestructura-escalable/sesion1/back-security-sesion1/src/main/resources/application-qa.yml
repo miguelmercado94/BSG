@@ -32,7 +32,7 @@ bsg:
 management:
   health:
     redis:
-      enabled: true
+      enabled: ${BSG_SECURITY_HEALTH_REDIS_ENABLED:false}
   endpoint:
     health:
       show-details: when_authorized
