@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { CellRepoRequestBody } from "../types";
-import { useMatch, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useMatch, useNavigate, useParams } from "react-router-dom";
 import { FolderTree } from "../components/FolderTree";
 import { ChatMarkdown } from "../components/ChatMarkdown";
 import {
@@ -190,6 +190,7 @@ function viewerShowsMarkdownTabs(v: ViewerState): v is NonNullable<ViewerState> 
 
 export function AdminCellEditorPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const isNew = useMatch({ path: "/admin/cells/new", end: true }) != null;
   const { cellId: cellIdStr } = useParams<{ cellId: string }>();
   const cellId = cellIdStr ?? "";
@@ -374,7 +375,12 @@ export function AdminCellEditorPage() {
         setCellName(c.name);
         setCellDescription(c.description ?? "");
         const repos = await fetchCellRepos(cellId);
-        if (!cancelled) setExistingRepos(repos);
+        if (!cancelled) {
+          setExistingRepos(repos);
+          if (repos.length === 0 || location.search.includes("newRepo=1")) {
+            setShowRepoForm(true);
+          }
+        }
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
       } finally {
@@ -830,7 +836,11 @@ export function AdminCellEditorPage() {
         );
       }
       setPendingIndexed([]);
-      navigate("/admin/cells");
+      if (isNew) {
+        navigate(`/admin/cells/${targetCellId}/edit?newRepo=1`);
+      } else {
+        navigate("/admin/cells");
+      }
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex));
     } finally {
@@ -905,25 +915,31 @@ export function AdminCellEditorPage() {
   const supportEmpty = supportRows.length === 0;
 
   return (
-    <div className="page connect-page admin-cell-editor">
-      <button
-        type="button"
-        className="admin-back-btn"
-        onClick={() => navigate("/admin/cells")}
-        aria-label="Volver"
-        title="Volver"
-      >
-        ←
-      </button>
+    <div className={`page connect-page admin-cell-editor ${isNew ? "admin-cell-editor--new" : "admin-cell-editor--edit"}`}>
+      <div className="admin-cell-editor__container">
+        <div className="admin-cell-editor__top-bar">
+          <button
+            type="button"
+            className="admin-back-btn"
+            onClick={() => navigate("/admin/cells")}
+            aria-label="Volver"
+            title="Volver"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+          </button>
 
-      <header className="page__header">
-        <h1>{isNew ? "Nueva célula" : "Editar célula"}</h1>
-        <p className="muted">
-          {isNew
-            ? "Define la célula. El botón + en «Repositorios actuales» indexa al momento; «Guardar» asocia los pendientes."
-            : "El + añade repositorios indexados al momento; «Guardar» actualiza datos y asocia pendientes."}
-        </p>
-      </header>
+          <header className="page__header admin-cell-editor__header">
+            <h1>{isNew ? "Nueva célula" : "Editar célula"}</h1>
+            <p className="muted">
+              {isNew
+                ? "Define los datos principales de la célula y continúa para configurar y vincular sus repositorios."
+                : "El + añade repositorios indexados al momento; «Guardar cambios» actualiza datos y asocia pendientes."}
+            </p>
+          </header>
+        </div>
 
       {err && (
         <p className="muted small" role="alert">
@@ -1500,8 +1516,28 @@ export function AdminCellEditorPage() {
               )}
 
               <div className="admin-cell-editor__save-wrap admin-cell-editor__save-actions">
-                <button type="submit" className="btn primary admin-cell-editor__save-btn" disabled={saving || indexingAdd}>
-                  {saving ? "Guardando…" : "Guardar"}
+                <button
+                  type="submit"
+                  className="btn primary admin-cell-editor__save-btn"
+                  disabled={saving || indexingAdd}
+                >
+                  {saving ? (
+                    <>
+                      <svg className="admin-btn-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                        <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+                      </svg>
+                      <span>Guardando…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{isNew ? "Continuar" : "Guardar cambios"}</span>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                      </svg>
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -1509,7 +1545,11 @@ export function AdminCellEditorPage() {
                   disabled={saving || indexingAdd}
                   onClick={() => void onCancel()}
                 >
-                  Cancelar
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                  <span>Cancelar</span>
                 </button>
               </div>
             </div>
@@ -1559,6 +1599,7 @@ export function AdminCellEditorPage() {
           </div>
         </form>
       )}
+      </div>
 
       {repoDeleteModal && (
         <div

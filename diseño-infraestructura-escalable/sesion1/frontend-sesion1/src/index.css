@@ -2822,11 +2822,103 @@ textarea {
 }
 
 .admin-cell-editor {
-  padding-top: 1rem;
+  padding-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-cell-editor__container {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.admin-cell-editor--edit .admin-cell-editor__container {
+  max-width: 1080px;
+}
+
+.admin-cell-editor__top-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+  width: 100%;
+}
+
+.admin-cell-editor__top-bar .admin-back-btn {
+  position: static;
+  margin: 0;
+  flex-shrink: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 12px;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f1f5f9;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.admin-cell-editor__top-bar .admin-back-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(96, 165, 250, 0.5);
+  color: #60a5fa;
+  transform: translateX(-2px);
+}
+
+.admin-cell-editor__header {
+  flex: 1;
+}
+
+.admin-cell-editor__header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
+}
+
+.admin-cell-editor__header p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: #94a3b8;
 }
 
 .admin-cell-editor__cell-identity {
   position: relative;
+  background: #141d2b;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 1.75rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
+}
+
+.admin-cell-editor--new .admin-cell-editor__layout {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.admin-cell-editor--new .admin-cell-editor__main {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .admin-cell-editor__cell-identity-eyebrow {
@@ -3001,31 +3093,104 @@ textarea {
 }
 
 .admin-cell-editor__save-wrap {
-  margin-top: 2rem;
+  margin-top: 1.5rem;
   padding-bottom: 2rem;
+  width: 100%;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+.admin-cell-editor--edit .admin-cell-editor__save-wrap {
+  max-width: 100%;
 }
 
 .admin-cell-editor__save-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 1rem;
   align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .admin-cell-editor__save-actions .admin-cell-editor__save-btn {
-  flex: 1 1 12rem;
-  max-width: none;
+  flex: 2.3;
+  min-width: 0;
+  padding: 0.85rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.admin-cell-editor__exit-btn {
-  flex: 0 1 8rem;
-  min-width: 6rem;
+.admin-cell-editor__save-actions .admin-cell-editor__save-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.5);
+  transform: translateY(-1px);
 }
 
-.admin-cell-editor__save-btn {
-  width: 100%;
-  max-width: 100%;
-  padding: 0.75rem 1rem;
+.admin-cell-editor__save-actions .admin-cell-editor__save-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.admin-cell-editor__save-actions .admin-cell-editor__save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.admin-cell-editor__save-actions .admin-cell-editor__cancel-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 0.85rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(30, 41, 59, 0.7);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.admin-cell-editor__save-actions .admin-cell-editor__cancel-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+  transform: translateY(-1px);
+}
+
+.admin-cell-editor__save-actions .admin-cell-editor__cancel-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.admin-cell-editor__save-actions .admin-cell-editor__cancel-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@keyframes admin-spinner {
+  to { transform: rotate(360deg); }
+}
+
+.admin-btn-spinner {
+  animation: admin-spinner 0.8s linear infinite;
 }
 
 .admin-cell-editor__results {
