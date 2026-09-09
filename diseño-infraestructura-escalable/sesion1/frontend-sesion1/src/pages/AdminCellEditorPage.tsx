@@ -588,9 +588,21 @@ export function AdminCellEditorPage() {
           });
         }
       });
-      setExistingRepos((prev) =>
-        prev.some((p) => p.id === res.id) ? prev : [...prev, res]
-      );
+      if (cellId) {
+        try {
+          const fresh = await fetchCellRepos(cellId);
+          setExistingRepos(fresh);
+        } catch {
+          setExistingRepos((prev) =>
+            prev.some((p) => p.id === res.id) ? prev.map((p) => (p.id === res.id ? res : p)) : [...prev, res]
+          );
+        }
+      } else {
+        setExistingRepos((prev) =>
+          prev.some((p) => p.id === res.id) ? prev.map((p) => (p.id === res.id ? res : p)) : [...prev, res]
+        );
+      }
+      setExplorerRepoId(res.id);
       setRepoUrl("");
       setRepoLocalPath("");
       setRepoDisplayName("");

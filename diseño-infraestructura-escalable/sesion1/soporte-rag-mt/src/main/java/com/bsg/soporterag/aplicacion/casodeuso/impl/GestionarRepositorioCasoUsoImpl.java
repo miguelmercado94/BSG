@@ -153,6 +153,10 @@ public class GestionarRepositorioCasoUsoImpl implements GestionarRepositorioCaso
 
         Mono<List<String>> archivosS3Mono = servicioBucketS3.listarArchivos(RolBucketS3.WORKAREA, repo.getUrlFolderS3Workarea())
                 .collectList()
+                .onErrorResume(e -> {
+                    log.warn("S3 workarea no disponible o con error al listar para repo={}: {}", repo.getNombre(), e.getMessage());
+                    return Mono.just(new ArrayList<String>());
+                })
                 .defaultIfEmpty(new ArrayList<>());
 
         return Mono.zip(celulasMono, archivosS3Mono)

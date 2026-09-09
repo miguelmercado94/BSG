@@ -49,13 +49,13 @@ soporte-rag:
 
   almacenamiento:
     s3:
-      endpoint: ""
-      presign-endpoint: ""
-      access-key: ""
-      secret-key: ""
-      bucket-soporte: ${SOPORTE_RAG_S3_BUCKET_SOPORTE:bsg-docviz-soporte-env}
-      bucket-borradores: ${SOPORTE_RAG_S3_BUCKET_BORRADORES:bsg-docviz-borradores-env}
-      bucket-workarea: ${SOPORTE_RAG_S3_BUCKET_WORKAREA:bsg-docviz-workarea-env}
+      endpoint: ${SOPORTE_RAG_S3_ENDPOINT:}
+      presign-endpoint: ${SOPORTE_RAG_S3_PRESIGN_ENDPOINT:}
+      access-key: ${AWS_ACCESS_KEY_ID:}
+      secret-key: ${AWS_SECRET_ACCESS_KEY:}
+      bucket-soporte: ${SOPORTE_RAG_S3_BUCKET_SOPORTE:soporte}
+      bucket-borradores: ${SOPORTE_RAG_S3_BUCKET_BORRADORES:borradores}
+      bucket-workarea: ${SOPORTE_RAG_S3_BUCKET_WORKAREA:workarea}
   cache:
     redis:
       enabled: true

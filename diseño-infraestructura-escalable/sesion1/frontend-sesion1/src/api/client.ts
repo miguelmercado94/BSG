@@ -467,8 +467,8 @@ export async function fetchCellRepos(cellId: string): Promise<CellRepoResponse[]
     createdAt: null,
     updatedAt: null,
     lastIngestAt: null,
-    lastIngestFiles: r.archivosS3Workarea ? r.archivosS3Workarea.length : 0,
-    lastIngestChunks: 0,
+    lastIngestFiles: (r.filesPath && r.filesPath.length > 0) ? r.filesPath.length : (r.archivosS3Workarea ? r.archivosS3Workarea.length : 0),
+    lastIngestChunks: (r.indexado && r.filesPath && r.filesPath.length > 0) ? r.filesPath.length : 0,
     lastIngestSkipped: null,
     linkedWithoutReindex: !!r.indexado,
     indexado: !!r.indexado,
@@ -624,8 +624,8 @@ export async function adminCreateRepo(cellId: string, body: CellRepoRequestBody)
     createdAt: null,
     updatedAt: null,
     lastIngestAt: null,
-    lastIngestFiles: r.archivosS3Workarea ? r.archivosS3Workarea.length : 0,
-    lastIngestChunks: 0,
+    lastIngestFiles: (r.filesPath && r.filesPath.length > 0) ? r.filesPath.length : (r.archivosS3Workarea ? r.archivosS3Workarea.length : 0),
+    lastIngestChunks: (r.indexado && r.filesPath && r.filesPath.length > 0) ? r.filesPath.length : 0,
     lastIngestSkipped: null,
     linkedWithoutReindex: !!r.indexado,
     indexado: !!r.indexado,
@@ -726,8 +726,8 @@ export async function adminCreateRepoStream(
         createdAt: null,
         updatedAt: null,
         lastIngestAt: null,
-        lastIngestFiles: updated.archivosS3Workarea ? updated.archivosS3Workarea.length : 0,
-        lastIngestChunks: 0,
+        lastIngestFiles: (updated.filesPath && updated.filesPath.length > 0) ? updated.filesPath.length : (updated.archivosS3Workarea ? updated.archivosS3Workarea.length : 0),
+        lastIngestChunks: (updated.indexado && updated.filesPath && updated.filesPath.length > 0) ? updated.filesPath.length : 0,
         lastIngestSkipped: null,
         linkedWithoutReindex: !!updated.indexado,
         indexado: !!updated.indexado,
@@ -911,16 +911,29 @@ export async function updateRepo(body: {
 // soporte-rag-mt no expone tree/file endpoints.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function adminFetchRepoTree(_cellId: string, repoId: string): Promise<FolderStructureDto> {
+export async function adminFetchRepoTree(cellId: string, repoId: string): Promise<FolderStructureDto> {
   try {
     const res = await fetch(`${apiBase()}/api/v1/repositorios?url=${encodeURIComponent(repoId)}`, { headers: headers() });
     if (res.ok) {
       const r = await parseJson<any>(res);
       const paths = (r.filesPath && r.filesPath.length > 0) ? r.filesPath : (r.archivosS3Workarea || []);
-      return buildFolderTree(paths);
+      if (paths.length > 0) {
+        return buildFolderTree(paths);
+      }
     }
   } catch {
     // ignore
+  }
+  if (cellId) {
+    try {
+      const cellRepos = await fetchCellRepos(cellId);
+      const matched = cellRepos.find((cr) => cr.id === repoId || cr.repositoryUrl === repoId);
+      if (matched && matched.filesPath && matched.filesPath.length > 0) {
+        return buildFolderTree(matched.filesPath);
+      }
+    } catch {
+      // ignore
+    }
   }
   return { folder: "", archivos: [], folders: [] };
 }

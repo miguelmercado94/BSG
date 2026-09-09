@@ -52,7 +52,9 @@ public class AlmacenamientoS3Configuracion {
                 .credentialsProvider(resolverCredenciales(propiedades));
 
         if (propiedades.usaEndpointPersonalizado()) {
-            builder.endpointOverride(URI.create(propiedades.endpoint().trim()));
+            builder.endpointOverride(URI.create(propiedades.endpoint().trim()))
+                    .serviceConfiguration(
+                            S3Configuration.builder().pathStyleAccessEnabled(true).build());
         }
         return builder.build();
     }
@@ -60,10 +62,10 @@ public class AlmacenamientoS3Configuracion {
     @Bean
     public ApplicationRunner inicializarBucketsS3(S3Client s3Client, AlmacenamientoS3Propiedades propiedades) {
         return args -> {
-            // Solo intentamos crear los buckets si estamos usando LocalStack (endpoint personalizado)
+            // Solo intentamos crear los buckets si estamos usando MinIO o LocalStack (endpoint personalizado)
             // En AWS real, los buckets ya existen (creados por Terraform).
             if (propiedades.usaEndpointPersonalizado()) {
-                log.info("Entorno local detectado. Verificando/creando buckets S3 en LocalStack...");
+                log.info("Entorno con endpoint personalizado detectado (MinIO/LocalStack). Verificando/creando buckets S3...");
                 List<String> buckets = List.of(
                         propiedades.bucketSoporte(),
                         propiedades.bucketBorradores(),

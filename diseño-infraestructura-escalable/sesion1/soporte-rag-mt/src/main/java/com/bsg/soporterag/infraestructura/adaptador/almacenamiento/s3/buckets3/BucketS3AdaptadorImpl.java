@@ -3,6 +3,8 @@ package com.bsg.soporterag.infraestructura.adaptador.almacenamiento.s3.buckets3;
 import com.bsg.soporterag.configuracion.AlmacenamientoS3Propiedades;
 import com.bsg.soporterag.configuracion.CondicionS3Habilitado;
 import com.bsg.soporterag.dominio.modelo.RolBucketS3;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 import org.springframework.util.CollectionUtils;
@@ -25,6 +27,7 @@ import java.util.stream.Collectors;
 @Conditional(CondicionS3Habilitado.class)
 public class BucketS3AdaptadorImpl implements BucketS3Adaptador {
 
+    private static final Logger log = LoggerFactory.getLogger(BucketS3AdaptadorImpl.class);
     private static final String CONTENT_TYPE_OCTET = "application/octet-stream";
     private static final String CONTENT_TYPE_FOLDER = "application/x-directory";
 
@@ -90,7 +93,11 @@ public class BucketS3AdaptadorImpl implements BucketS3Adaptador {
         String prefijo = ClaveS3Util.prefijoListado(folderPath);
         return Mono.fromCallable(() -> listarClavesArchivo(bucket, prefijo))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMapMany(Flux::fromIterable);
+                .flatMapMany(Flux::fromIterable)
+                .onErrorResume(e -> {
+                    log.warn("Error al listar archivos S3 para bucket={} prefijo={}: {}", bucket, prefijo, e.getMessage());
+                    return Flux.empty();
+                });
     }
 
     @Override
