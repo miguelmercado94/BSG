@@ -13,16 +13,21 @@ spring:
 
       # Rutas explicitas hacia los microservicios con orden de prioridad
       routes:
-        # back-security: autenticación, usuarios y estado de salud público (Prioridad 1)
-        - id: back-security
+        # back-security: peticiones que ya vienen con /security-auth/** (Prioridad 1)
+        - id: back-security-direct
           order: 1
           uri: ${SECURITY_SERVICE_URI:http://back-security-sesion1.railway.internal:8080}
           predicates:
-            - Path=/api/public/**, /api/v1/auth/**, /api/v1/customers/**, /security-auth/**
+            - Path=/security-auth/**
+
+        # back-security: autenticación, usuarios y salud pública desde el frontend (Prioridad 2)
+        - id: back-security-api
+          order: 2
+          uri: ${SECURITY_SERVICE_URI:http://back-security-sesion1.railway.internal:8080}
+          predicates:
+            - Path=/api/public/**, /api/v1/auth/**, /api/v1/customers/**
           filters:
-            - RewritePath=/security-auth/auth/(?<segment>.*), /api/v1/auth/${segment}
-            - RewritePath=/security-auth/users/(?<segment>.*), /api/v1/customers/${segment}
-            - RewritePath=/security-auth/(?<segment>.*), /api/v1/${segment}
+            - PrefixPath=/security-auth
 
         # soporte-rag-mt: peticiones ya prefijadas con /docviz/** (Prioridad 2)
         - id: soporte-rag-mt-docviz

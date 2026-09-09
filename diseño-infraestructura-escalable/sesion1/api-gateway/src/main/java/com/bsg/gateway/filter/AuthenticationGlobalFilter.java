@@ -72,7 +72,7 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
 
         // 4. Llamar a back-security para validar el token
         return securityClient.get()
-                .uri("/api/v1/auth/validate")
+                .uri("/security-auth/api/v1/auth/validate")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                 .retrieve()
                 .bodyToMono(ValidateResponse.class)
