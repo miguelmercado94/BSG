@@ -105,52 +105,329 @@ public class HerramientasChat {
     }
     
     // ... resto de las herramientas ...
-    @Tool(name = "consultarPaginaWeb", description = "Consulta una página web y extrae su contenido textual principal para ser analizado.")
+    @Tool(name = "consultarPaginaWeb", description = "Consulta en línea cualquier página web de documentación técnica, especificación oficial o API (Oracle PL/SQL, Microsoft Learn .NET, Python, Java, PostgreSQL, etc.) asociada a los tags del repositorio. Extrae contenido limpio, explicaciones de sintaxis, reglas y ejemplos de código. Opcionalmente recibe un tema o palabra clave para localizar o profundizar en una sección o sub-enlace relevante.")
     public String consultarPaginaWeb(
-            @ToolParam(description = "La URL completa de la página a consultar.") String url
+            @ToolParam(description = "La URL completa de la documentación o página web a consultar (ej: URLs configuradas en los tags del repositorio).") String url,
+            @ToolParam(description = "Opcional. Palabra clave o concepto técnico a buscar dentro del contenido o sub-enlaces de la documentación (ej: 'cursores', 'LINQ', 'triggers', 'DbContext', 'exceptions', etc.).", required = false) String tema
     ) {
         if (!StringUtils.hasText(url)) {
             return "URL no válida";
         }
         String urlTrim = url.trim();
-        // Si es una consulta a mvnrepository o maven central, resolver mediante el catálogo oficial
+
+        // 1. Detección de ecosistemas de paquetes y dependencias
         if (urlTrim.contains("mvnrepository.com") || urlTrim.contains("search.maven.org") || urlTrim.contains("repo1.maven.org")) {
-            return resolverConsultaMavenDesdeUrl(urlTrim);
+            return resolverConsultaMavenDesdeUrl(urlTrim, tema);
+        }
+        if (urlTrim.contains("nuget.org")) {
+            return resolverConsultaNuget(urlTrim, tema);
+        }
+        if (urlTrim.contains("pypi.org")) {
+            return resolverConsultaPypi(urlTrim, tema);
+        }
+        if (urlTrim.contains("npmjs.com")) {
+            return resolverConsultaNpm(urlTrim, tema);
         }
 
+        // 2. Extractor genérico de portales de documentación técnica (Oracle, Microsoft, etc.)
+        return extraerDocumentacionGenerica(urlTrim, tema);
+    }
+
+    private String extraerDocumentacionGenerica(String url, String tema) {
         try {
-            org.jsoup.nodes.Document doc = Jsoup.connect(urlTrim)
+            org.jsoup.nodes.Document doc = Jsoup.connect(url)
                     .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                     .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
-                    .timeout(12000)
+                    .timeout(15000)
                     .followRedirects(true)
                     .get();
-            String text = doc.body() != null ? doc.body().text() : doc.text();
-            if (text != null && text.length() > 8000) {
-                return text.substring(0, 8000) + "... [contenido truncado]";
+
+            // Si se especificó un tema, verificar si existe un sub-enlace directo en la página que apunte a ese tema
+            if (StringUtils.hasText(tema)) {
+                String subpaginaContenido = intentarNavegarSubenlace(doc, tema.trim());
+                if (StringUtils.hasText(subpaginaContenido)) {
+                    return subpaginaContenido;
+                }
             }
-            return text != null ? text : "La página no contiene texto visible.";
+
+            // Extraer y formatear contenido limpio de la página principal
+            return formatearContenidoLimpio(doc, url, tema);
+
         } catch (org.jsoup.HttpStatusException e) {
-            return "No se pudo acceder a la URL (" + urlTrim + ") debido a restricciones del servidor web (HTTP " + e.getStatusCode() + "). Si buscas dependencias Maven, utiliza la herramienta 'consultarDependenciasMaven'.";
+            return "No se pudo acceder a la URL (" + url + ") debido a restricciones del servidor web (HTTP " + e.getStatusCode() + ").";
         } catch (IOException e) {
-            return "Error al intentar acceder a la URL: " + e.getMessage() + ". Si buscas dependencias Maven, utiliza la herramienta 'consultarDependenciasMaven'.";
+            return "Error al intentar acceder a la URL: " + e.getMessage();
         } catch (Exception e) {
             return "Ocurrió un error inesperado al procesar la página: " + e.getMessage();
         }
     }
 
-    @Tool(name = "consultarDependenciasMaven", description = "Consulta en tiempo real el repositorio oficial de Maven Central para obtener las versiones más recientes y estables de dependencias y librerías Java (ej: 'software.amazon.awssdk:dynamodb', 'com.amazonaws:aws-java-sdk-sqs', 'software.amazon.awssdk:bom', 'dynamodb', etc.).")
-    public String consultarDependenciasMaven(
-            @ToolParam(description = "Identificador de la dependencia: coordenadas groupId:artifactId (ej: 'software.amazon.awssdk:dynamodb') o nombre del artefacto (ej: 'aws-java-sdk-sqs', 'dynamodb').") String dependencia
-    ) {
-        if (!StringUtils.hasText(dependencia)) {
-            return "Por favor especifica el nombre o coordenadas de la dependencia a consultar.";
+    private String intentarNavegarSubenlace(org.jsoup.nodes.Document doc, String tema) {
+        try {
+            String[] palabras = tema.toLowerCase().split("\\s+");
+            org.jsoup.select.Elements enlaces = doc.select("a[href]");
+
+            org.jsoup.nodes.Element mejorEnlace = null;
+            int maxCoincidencias = 0;
+
+            for (org.jsoup.nodes.Element a : enlaces) {
+                String href = a.attr("href");
+                String texto = a.text().toLowerCase();
+                String hrefLower = href.toLowerCase();
+
+                if (href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:")) {
+                    continue;
+                }
+
+                int coincidencias = 0;
+                for (String p : palabras) {
+                    if (p.length() > 2 && (texto.contains(p) || hrefLower.contains(p))) {
+                        coincidencias++;
+                    }
+                }
+
+                if (coincidencias > maxCoincidencias) {
+                    maxCoincidencias = coincidencias;
+                    mejorEnlace = a;
+                }
+            }
+
+            if (mejorEnlace != null && maxCoincidencias > 0) {
+                String urlDestino = mejorEnlace.absUrl("href");
+                if (StringUtils.hasText(urlDestino) && !urlDestino.equalsIgnoreCase(doc.baseUri())) {
+                    org.jsoup.nodes.Document subDoc = Jsoup.connect(urlDestino)
+                            .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                            .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+                            .timeout(15000)
+                            .followRedirects(true)
+                            .get();
+
+                    String textoSub = formatearContenidoLimpio(subDoc, urlDestino, tema);
+                    return "### Documentación encontrada para '" + tema + "' (" + mejorEnlace.text() + " - " + urlDestino + "):\n\n" + textoSub;
+                }
+            }
+        } catch (Exception ignored) {
         }
-        return resolverYConsultarMaven(dependencia.trim());
+        return null;
     }
 
-    private String resolverConsultaMavenDesdeUrl(String url) {
+    private String formatearContenidoLimpio(org.jsoup.nodes.Document doc, String url, String tema) {
+        org.jsoup.nodes.Document cleanDoc = doc.clone();
+
+        // 1. Eliminar elementos superfluos
+        cleanDoc.select("script, style, nav, header, footer, aside, noscript, iframe, .sidebar, .navbar, .menu, .cookie-consent, #cookie-banner, [role='navigation'], [role='banner']").remove();
+
+        // 2. Extraer contenedor principal
+        org.jsoup.nodes.Element contentElem = cleanDoc.selectFirst("main, article, [role='main'], #content, .content, .documentation, #main-column, body");
+        if (contentElem == null) {
+            contentElem = cleanDoc.body();
+        }
+
+        // 3. Formatear bloques de código
+        for (org.jsoup.nodes.Element pre : contentElem.select("pre")) {
+            String codeText = pre.text();
+            pre.text("\n```\n" + codeText + "\n```\n");
+        }
+
+        // 4. Formatear encabezados
+        for (int h = 1; h <= 4; h++) {
+            String prefix = "#".repeat(h) + " ";
+            for (org.jsoup.nodes.Element elem : contentElem.select("h" + h)) {
+                elem.text("\n" + prefix + elem.text() + "\n");
+            }
+        }
+
+        // 5. Formatear listas
+        for (org.jsoup.nodes.Element li : contentElem.select("li")) {
+            li.text("\n- " + li.text());
+        }
+
+        String titulo = StringUtils.hasText(cleanDoc.title()) ? cleanDoc.title() : url;
+        String texto = contentElem.text();
+
+        // Limpiar espacios en blanco excesivos
+        texto = texto.replaceAll("[ \t]+", " ").replaceAll("\n\\s*\n", "\n\n").trim();
+
+        // 6. Recolectar secciones o enlaces de interés si no son excesivos
+        StringBuilder sb = new StringBuilder();
+        sb.append("## ").append(titulo).append("\n");
+        sb.append("**Fuente:** ").append(url).append("\n\n");
+
+        if (texto.length() > 8500) {
+            sb.append(texto, 0, 8500).append("\n\n... [contenido truncado para contexto]");
+        } else {
+            sb.append(texto);
+        }
+
+        // Si es una página corta o de índice, agregar lista de enlaces de secciones
+        org.jsoup.select.Elements enlaces = contentElem.select("a[href]");
+        List<String> secciones = new ArrayList<>();
+        for (org.jsoup.nodes.Element a : enlaces) {
+            String t = a.text().trim();
+            String href = a.absUrl("href");
+            if (t.length() > 3 && StringUtils.hasText(href) && !href.startsWith("#") && !secciones.contains(t) && secciones.size() < 8) {
+                secciones.add("- [" + t + "](" + href + ")");
+            }
+        }
+
+        if (!secciones.isEmpty() && texto.length() < 4000) {
+            sb.append("\n\n### Secciones y capítulos disponibles en este recurso:\n");
+            sb.append(String.join("\n", secciones));
+        }
+
+        return sb.toString();
+    }
+
+    private String resolverConsultaNuget(String url, String tema) {
+        try {
+            String query = null;
+            if (url.contains("/packages/")) {
+                String sub = url.substring(url.indexOf("/packages/") + "/packages/".length());
+                query = sub.split("/")[0];
+            } else if (StringUtils.hasText(tema)) {
+                query = tema.trim();
+            }
+
+            if (!StringUtils.hasText(query)) {
+                return "Repositorio NuGet (.NET) disponible. Especifica el nombre del paquete para consultar sus versiones más recientes.";
+            }
+
+            String apiUrl = "https://api-v2v3search-0.nuget.org/query?q=" + java.net.URLEncoder.encode(query, StandardCharsets.UTF_8) + "&take=3";
+            String json = Jsoup.connect(apiUrl)
+                    .userAgent("Mozilla/5.0")
+                    .ignoreContentType(true)
+                    .timeout(6000)
+                    .execute()
+                    .body();
+
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+            com.fasterxml.jackson.databind.JsonNode data = root.path("data");
+            if (!data.isArray() || data.isEmpty()) {
+                return "No se encontraron paquetes en NuGet para '" + query + "'.";
+            }
+
+            StringBuilder sb = new StringBuilder("### Paquetes NuGet (.NET) encontrados para '").append(query).append("':\n\n");
+            for (com.fasterxml.jackson.databind.JsonNode pkg : data) {
+                String id = pkg.path("id").asText();
+                String ver = pkg.path("version").asText();
+                String desc = pkg.path("description").asText("");
+                String projectUrl = pkg.path("projectUrl").asText("");
+                sb.append("- **`").append(id).append("`**: versión **").append(ver).append("**\n");
+                if (StringUtils.hasText(desc)) {
+                    sb.append("  ").append(desc.length() > 150 ? desc.substring(0, 150) + "..." : desc).append("\n");
+                }
+                if (StringUtils.hasText(projectUrl)) {
+                    sb.append("  [Sitio del proyecto](").append(projectUrl).append(")\n");
+                }
+            }
+            return sb.toString();
+
+        } catch (Exception e) {
+            return "Error al consultar NuGet para '" + url + "': " + e.getMessage();
+        }
+    }
+
+    private String resolverConsultaPypi(String url, String tema) {
+        try {
+            String pkg = null;
+            if (url.contains("/project/")) {
+                String sub = url.substring(url.indexOf("/project/") + "/project/".length());
+                pkg = sub.split("/")[0];
+            } else if (StringUtils.hasText(tema)) {
+                pkg = tema.trim();
+            }
+
+            if (!StringUtils.hasText(pkg)) {
+                return "Repositorio PyPI (Python) disponible. Especifica el paquete para consultar su versión más reciente.";
+            }
+
+            String apiUrl = "https://pypi.org/pypi/" + java.net.URLEncoder.encode(pkg, StandardCharsets.UTF_8) + "/json";
+            String json = Jsoup.connect(apiUrl)
+                    .userAgent("Mozilla/5.0")
+                    .ignoreContentType(true)
+                    .timeout(6000)
+                    .execute()
+                    .body();
+
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+            com.fasterxml.jackson.databind.JsonNode info = root.path("info");
+            String name = info.path("name").asText();
+            String ver = info.path("version").asText();
+            String summary = info.path("summary").asText("");
+            String homePage = info.path("home_page").asText("");
+
+            return String.format(
+                    """
+                    ### Paquete PyPI (Python): %s
+                    - Última versión: **%s**
+                    - Descripción: %s
+                    - Documentación/Home: %s
+                    """,
+                    name, ver, summary, homePage
+            );
+
+        } catch (org.jsoup.HttpStatusException e) {
+            if (e.getStatusCode() == 404) {
+                return "El paquete Python no fue encontrado en PyPI (HTTP 404).";
+            }
+            return "Error al consultar PyPI: HTTP " + e.getStatusCode();
+        } catch (Exception e) {
+            return "Error al consultar PyPI: " + e.getMessage();
+        }
+    }
+
+    private String resolverConsultaNpm(String url, String tema) {
+        try {
+            String pkg = null;
+            if (url.contains("/package/")) {
+                String sub = url.substring(url.indexOf("/package/") + "/package/".length());
+                pkg = sub.split("/")[0];
+            } else if (StringUtils.hasText(tema)) {
+                pkg = tema.trim();
+            }
+
+            if (!StringUtils.hasText(pkg)) {
+                return "Registro npm (JavaScript/TypeScript) disponible. Especifica el paquete a consultar.";
+            }
+
+            String apiUrl = "https://registry.npmjs.org/" + java.net.URLEncoder.encode(pkg, StandardCharsets.UTF_8) + "/latest";
+            String json = Jsoup.connect(apiUrl)
+                    .userAgent("Mozilla/5.0")
+                    .ignoreContentType(true)
+                    .timeout(6000)
+                    .execute()
+                    .body();
+
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+            String name = root.path("name").asText();
+            String ver = root.path("version").asText();
+            String desc = root.path("description").asText("");
+
+            return String.format(
+                    """
+                    ### Paquete npm (JavaScript/TypeScript): %s
+                    - Última versión: **%s**
+                    - Descripción: %s
+                    """,
+                    name, ver, desc
+            );
+
+        } catch (org.jsoup.HttpStatusException e) {
+            if (e.getStatusCode() == 404) {
+                return "El paquete no fue encontrado en el registro npm (HTTP 404).";
+            }
+            return "Error al consultar npm: HTTP " + e.getStatusCode();
+        } catch (Exception e) {
+            return "Error al consultar npm: " + e.getMessage();
+        }
+    }
+
+    private String resolverConsultaMavenDesdeUrl(String url, String tema) {
+        if (StringUtils.hasText(tema)) {
+            return resolverYConsultarMaven(tema.trim());
+        }
         if (url.contains("/artifact/")) {
             try {
                 String sub = url.substring(url.indexOf("/artifact/") + "/artifact/".length());
@@ -163,7 +440,7 @@ public class HerramientasChat {
         }
         return """
                Repositorio Maven Central disponible en línea.
-               Para consultar versiones exactas y actualizadas de cualquier dependencia, utiliza la herramienta 'consultarDependenciasMaven' indicando las coordenadas (por ejemplo: 'software.amazon.awssdk:dynamodb', 'com.amazonaws:aws-java-sdk-sqs', 'software.amazon.awssdk:bom').
+               Para consultar versiones exactas y actualizadas de cualquier dependencia, utiliza la herramienta 'consultarDependenciasMaven' indicando las coordenadas (por ejemplo: 'software.amazon.awssdk:dynamodb', 'com.amazonaws:aws-java-sdk-sqs', 'software.amazon.awssdk:bom') o especifica el nombre en el parámetro 'tema'.
                """;
     }
 

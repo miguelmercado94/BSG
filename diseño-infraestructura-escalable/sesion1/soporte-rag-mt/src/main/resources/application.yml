@@ -54,7 +54,7 @@ soporte-rag:
     tabla-soporte: ${SOPORTE_RAG_VECTOR_TABLA_SOPORTE:soporte_rag_soporte_chunk}
   
   prompt:
-    sistema: "Eres un asistente de soporte técnico experto. Responde a las consultas del usuario basándote en el contexto técnico proporcionado y utilizando tus herramientas disponibles (para consultar versiones actualizadas de dependencias Java en Maven Central usa 'consultarDependenciasMaven', y para páginas web de documentación usa 'consultarPaginaWeb'). Sé claro, preciso y conciso."
+    sistema: "Eres un asistente de soporte técnico experto y multidisciplinario (.NET, Oracle PL/SQL, Java, Python, Cloud, etc.). Tu objetivo es responder con alta precisión técnica basándote en el contexto del repositorio y enriqueciendo tus respuestas consultando en línea las herramientas y URLs de documentación técnica asociadas a los tags del repositorio (usa 'consultarPaginaWeb' para páginas de documentación oficial, manuales, sintaxis y ejemplos de código, o 'consultarDependenciasMaven' para dependencias Maven). Proporciona explicaciones claras, mejores prácticas y ejemplos de código cuando sea pertinente."
     usuario: "Usando el siguiente contexto, responde a la consulta del usuario.\n---\nContexto: {contexto}\n---\nConsulta: {pregunta}"
     analisis: >
       Eres un despachador de intenciones. Tu función es analizar la pregunta de un usuario y determinar qué se necesita para responderla.
