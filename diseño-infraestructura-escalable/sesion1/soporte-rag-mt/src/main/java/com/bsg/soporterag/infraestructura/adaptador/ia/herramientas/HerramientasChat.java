@@ -133,6 +133,16 @@ public class HerramientasChat {
         return extraerDocumentacionGenerica(urlTrim, tema);
     }
 
+    @Tool(name = "consultarDependenciasMaven", description = "Consulta en tiempo real el repositorio oficial de Maven Central para obtener las versiones más recientes y estables de dependencias y librerías Java (ej: 'software.amazon.awssdk:dynamodb', 'com.amazonaws:aws-java-sdk-sqs', 'software.amazon.awssdk:bom', 'dynamodb', etc.).")
+    public String consultarDependenciasMaven(
+            @ToolParam(description = "Identificador de la dependencia: coordenadas groupId:artifactId o nombre del artefacto.") String dependencia
+    ) {
+        if (!StringUtils.hasText(dependencia)) {
+            return "Por favor especifica el nombre o coordenadas de la dependencia.";
+        }
+        return resolverYConsultarMaven(dependencia.trim());
+    }
+
     private String extraerDocumentacionGenerica(String url, String tema) {
         try {
             org.jsoup.nodes.Document doc = Jsoup.connect(url)
