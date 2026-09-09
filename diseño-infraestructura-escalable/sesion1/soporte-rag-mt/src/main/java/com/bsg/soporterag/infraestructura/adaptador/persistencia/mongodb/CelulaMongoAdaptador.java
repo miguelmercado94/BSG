@@ -31,7 +31,7 @@ public class CelulaMongoAdaptador implements CelulaPort {
 
     @Override
     public Mono<Celula> findByCodigo(String codigo) {
-        return celulaRepositorioMongo.findByCodigoCelula(codigo).map(celulaDocumentoMapper::aDominio);
+        return celulaRepositorioMongo.findFirstByCodigoCelula(codigo).map(celulaDocumentoMapper::aDominio);
     }
 
     @Override

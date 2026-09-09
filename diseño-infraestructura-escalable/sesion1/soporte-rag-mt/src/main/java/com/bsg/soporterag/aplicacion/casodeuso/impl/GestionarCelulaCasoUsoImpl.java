@@ -38,9 +38,17 @@ public class GestionarCelulaCasoUsoImpl implements GestionarCelulaCasoUso {
 
     @Override
     public Mono<CelulaResponseDto> crear(CelulaRequestDto request) {
-        Celula celula = celulaMapperDto.aDominio(request);
-        return celulaServicio.crear(celula)
-                .map(celulaMapperDto::aResponse);
+        if (!org.springframework.util.StringUtils.hasText(request.getCodigo())) {
+            return Mono.error(new IllegalArgumentException("El código de la célula es obligatorio"));
+        }
+        return celulaServicio.obtenerPorCodigo(request.getCodigo().trim())
+                .flatMap(existente -> Mono.<CelulaResponseDto>error(
+                        new IllegalArgumentException("Ya existe una célula con el código: " + request.getCodigo())))
+                .switchIfEmpty(Mono.defer(() -> {
+                    Celula celula = celulaMapperDto.aDominio(request);
+                    return celulaServicio.crear(celula)
+                            .map(celulaMapperDto::aResponse);
+                }));
     }
 
     @Override
