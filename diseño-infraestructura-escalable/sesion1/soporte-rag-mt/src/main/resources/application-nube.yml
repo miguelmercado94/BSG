@@ -8,7 +8,7 @@ spring:
         api-key: ${OPENAI_API_KEY:}
         options:
           model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
-          max-completion-tokens: 8192
+          max-tokens: ${OPENAI_MAX_TOKENS:4096}
       embedding:
         base-url: https://api.openai.com
         api-key: ${OPENAI_API_KEY:}
