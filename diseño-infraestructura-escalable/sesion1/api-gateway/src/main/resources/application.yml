@@ -13,6 +13,22 @@ spring:
 
       # Rutas explicitas hacia los microservicios con orden de prioridad
       routes:
+        # soporte-rag-mt: WebSocket de chat por HU (Prioridad 0)
+        - id: soporte-rag-mt-ws
+          order: 0
+          uri: ${SOPORTE_RAG_WS_URI:ws://soporte-rag-mt.railway.internal:8080}
+          predicates:
+            - Path=/ws/**
+          filters:
+            - PrefixPath=/docviz
+
+        # soporte-rag-mt: WebSocket directo prefijado con /docviz/ws/** (Prioridad 0)
+        - id: soporte-rag-mt-ws-docviz
+          order: 0
+          uri: ${SOPORTE_RAG_WS_URI:ws://soporte-rag-mt.railway.internal:8080}
+          predicates:
+            - Path=/docviz/ws/**
+
         # back-security: peticiones que ya vienen con /security-auth/** (Prioridad 1)
         - id: back-security-direct
           order: 1
@@ -65,12 +81,8 @@ spring:
       globalcors:
         cors-configurations:
           '[/**]':
-            allowedOrigins:
-              - "http://localhost:3000"
-              - "http://localhost:5173"
-              - "http://127.0.0.1:5173"
-              - "https://*.railway.app"
-              - "https://*.up.railway.app"
+            allowedOriginPatterns:
+              - "*"
             allowedMethods:
               - GET
               - POST

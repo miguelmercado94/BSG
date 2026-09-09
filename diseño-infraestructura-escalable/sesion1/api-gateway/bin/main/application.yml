@@ -11,25 +11,65 @@ spring:
         connect-timeout: 10000
         response-timeout: 30s
 
-      # Rutas explicitas hacia los microservicios
+      # Rutas explicitas hacia los microservicios con orden de prioridad
       routes:
-        # back-security: /api/auth/**, /api/users/**, /security-auth/**
-        - id: back-security
+        # soporte-rag-mt: WebSocket de chat por HU (Prioridad 0)
+        - id: soporte-rag-mt-ws
+          order: 0
+          uri: ${SOPORTE_RAG_WS_URI:ws://soporte-rag-mt.railway.internal:8080}
+          predicates:
+            - Path=/ws/**
+          filters:
+            - PrefixPath=/docviz
+
+        # soporte-rag-mt: WebSocket directo prefijado con /docviz/ws/** (Prioridad 0)
+        - id: soporte-rag-mt-ws-docviz
+          order: 0
+          uri: ${SOPORTE_RAG_WS_URI:ws://soporte-rag-mt.railway.internal:8080}
+          predicates:
+            - Path=/docviz/ws/**
+
+        # back-security: peticiones que ya vienen con /security-auth/** (Prioridad 1)
+        - id: back-security-direct
+          order: 1
           uri: ${SECURITY_SERVICE_URI:http://back-security-sesion1.railway.internal:8080}
           predicates:
-            - Path=/api/auth/**, /api/users/**, /security-auth/**
-          filters:
-            - RewritePath=/api/auth/(?<segment>.*), /security-auth/auth/${segment}
-            - RewritePath=/api/users/(?<segment>.*), /security-auth/users/${segment}
+            - Path=/security-auth/**
 
-        # soporte-rag-mt (core): /api/rag/**, /api/chat/**, /docviz/**
-        - id: soporte-rag-mt
+        # back-security: autenticación, usuarios y salud pública desde el frontend (Prioridad 2)
+        - id: back-security-api
+          order: 2
+          uri: ${SECURITY_SERVICE_URI:http://back-security-sesion1.railway.internal:8080}
+          predicates:
+            - Path=/api/public/**, /api/v1/auth/**, /api/v1/customers/**
+          filters:
+            - PrefixPath=/security-auth
+
+        # soporte-rag-mt: peticiones ya prefijadas con /docviz/** (Prioridad 2)
+        - id: soporte-rag-mt-docviz
+          order: 2
           uri: ${SOPORTE_RAG_URI:http://soporte-rag-mt.railway.internal:8080}
           predicates:
-            - Path=/api/rag/**, /api/chat/**, /docviz/**
+            - Path=/docviz/**
+
+        # soporte-rag-mt: atajos de compatibilidad /api/rag/** y /api/chat/** (Prioridad 3)
+        - id: soporte-rag-mt-shortcuts
+          order: 3
+          uri: ${SOPORTE_RAG_URI:http://soporte-rag-mt.railway.internal:8080}
+          predicates:
+            - Path=/api/rag/**, /api/chat/**
           filters:
-            - RewritePath=/api/rag/(?<segment>.*), /docviz/api/v1/soporte/${segment}
-            - RewritePath=/api/chat/(?<segment>.*), /docviz/api/v1/soporte/chat/${segment}
+            - RewritePath=/api/rag/(?<segment>.*), /docviz/api/v1/soportes/${segment}
+            - RewritePath=/api/chat/(?<segment>.*), /docviz/api/v1/soportes/chat/${segment}
+
+        # soporte-rag-mt (core): resto de /api/v1/** (celulas, repos, soportes, tareas, workspace) (Prioridad 10)
+        - id: soporte-rag-mt-api
+          order: 10
+          uri: ${SOPORTE_RAG_URI:http://soporte-rag-mt.railway.internal:8080}
+          predicates:
+            - Path=/api/v1/**
+          filters:
+            - PrefixPath=/docviz
 
       # Discovery automático desactivado (descubrimiento vía DNS privado Railway)
       discovery:
@@ -41,12 +81,8 @@ spring:
       globalcors:
         cors-configurations:
           '[/**]':
-            allowedOrigins:
-              - "http://localhost:3000"
-              - "http://localhost:5173"
-              - "http://127.0.0.1:5173"
-              - "https://*.railway.app"
-              - "https://*.up.railway.app"
+            allowedOriginPatterns:
+              - "*"
             allowedMethods:
               - GET
               - POST
