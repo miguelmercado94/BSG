@@ -24,8 +24,8 @@ public class IaConfiguracion {
 
     @Bean
     @ConditionalOnMissingBean(ProveedorChatPort.class)
-    ProveedorChatPort proveedorChatPort(ChatModel chatModel, PromptsPropiedades prompts, ChatPropiedades chatPropiedades) {
-        return new SpringAiChatAdaptador(chatModel, prompts, chatPropiedades);
+    ProveedorChatPort proveedorChatPort(ChatModel chatModel, PromptsPropiedades prompts, ChatPropiedades chatPropiedades, HerramientasChat herramientasChat) {
+        return new SpringAiChatAdaptador(chatModel, prompts, chatPropiedades, herramientasChat);
     }
 
     @Bean

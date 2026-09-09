@@ -253,9 +253,18 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                     // 3. Historial servido desde Redis (cache por HU) con fallback a Mongo
                     Mono<String> contextoHistorialMono = construirContextoHistorial(tarea);
 
-                    // 4. Combinar todo: referencias + RAG + historial → stream a GPT
-                    return Mono.zip(contextoRagMono, contextoDeReferencias, contextoHistorialMono).flatMapMany(tuple -> {
-                        String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), tuple.getT3()).trim();
+                    // 4. Herramientas y tags disponibles
+                    Mono<String> toolsMono = obtenerHerramientasDisponibles(tarea);
+
+                    // 5. Combinar todo: referencias + RAG + historial + herramientas → stream a GPT
+                    return Mono.zip(contextoRagMono, contextoDeReferencias, contextoHistorialMono, toolsMono).flatMapMany(tuple -> {
+                        String tools = tuple.getT4();
+                        String contextoTools = StringUtils.hasText(tools)
+                                ? "Herramientas y documentación web disponibles para consulta en línea:\n" + tools
+                                : "";
+                        String contextoFinal = java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3(), contextoTools)
+                                .filter(s -> s != null && !s.isBlank())
+                                .collect(Collectors.joining("\n\n"));
 
                         Flux<String> tokenStream = contextoFinal.isEmpty()
                                 ? chatServicio.conversarDirectoStream(codigoTarea, request.getMensaje())

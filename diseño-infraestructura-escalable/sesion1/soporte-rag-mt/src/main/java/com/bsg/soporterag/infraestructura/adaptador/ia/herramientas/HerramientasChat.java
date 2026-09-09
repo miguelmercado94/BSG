@@ -109,13 +109,149 @@ public class HerramientasChat {
     public String consultarPaginaWeb(
             @ToolParam(description = "La URL completa de la página a consultar.") String url
     ) {
+        if (!StringUtils.hasText(url)) {
+            return "URL no válida";
+        }
+        String urlTrim = url.trim();
+        // Si es una consulta a mvnrepository o maven central, resolver mediante el catálogo oficial
+        if (urlTrim.contains("mvnrepository.com") || urlTrim.contains("search.maven.org") || urlTrim.contains("repo1.maven.org")) {
+            return resolverConsultaMavenDesdeUrl(urlTrim);
+        }
+
         try {
-            org.jsoup.nodes.Document doc = Jsoup.connect(url).get();
-            return doc.body().text();
+            org.jsoup.nodes.Document doc = Jsoup.connect(urlTrim)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                    .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+                    .timeout(12000)
+                    .followRedirects(true)
+                    .get();
+            String text = doc.body() != null ? doc.body().text() : doc.text();
+            if (text != null && text.length() > 8000) {
+                return text.substring(0, 8000) + "... [contenido truncado]";
+            }
+            return text != null ? text : "La página no contiene texto visible.";
+        } catch (org.jsoup.HttpStatusException e) {
+            return "No se pudo acceder a la URL (" + urlTrim + ") debido a restricciones del servidor web (HTTP " + e.getStatusCode() + "). Si buscas dependencias Maven, utiliza la herramienta 'consultarDependenciasMaven'.";
         } catch (IOException e) {
-            return "Error al intentar acceder a la URL: " + e.getMessage();
+            return "Error al intentar acceder a la URL: " + e.getMessage() + ". Si buscas dependencias Maven, utiliza la herramienta 'consultarDependenciasMaven'.";
         } catch (Exception e) {
             return "Ocurrió un error inesperado al procesar la página: " + e.getMessage();
+        }
+    }
+
+    @Tool(name = "consultarDependenciasMaven", description = "Consulta en tiempo real el repositorio oficial de Maven Central para obtener las versiones más recientes y estables de dependencias y librerías Java (ej: 'software.amazon.awssdk:dynamodb', 'com.amazonaws:aws-java-sdk-sqs', 'software.amazon.awssdk:bom', 'dynamodb', etc.).")
+    public String consultarDependenciasMaven(
+            @ToolParam(description = "Identificador de la dependencia: coordenadas groupId:artifactId (ej: 'software.amazon.awssdk:dynamodb') o nombre del artefacto (ej: 'aws-java-sdk-sqs', 'dynamodb').") String dependencia
+    ) {
+        if (!StringUtils.hasText(dependencia)) {
+            return "Por favor especifica el nombre o coordenadas de la dependencia a consultar.";
+        }
+        return resolverYConsultarMaven(dependencia.trim());
+    }
+
+    private String resolverConsultaMavenDesdeUrl(String url) {
+        if (url.contains("/artifact/")) {
+            try {
+                String sub = url.substring(url.indexOf("/artifact/") + "/artifact/".length());
+                String[] parts = sub.split("/");
+                if (parts.length >= 2) {
+                    return resolverYConsultarMaven(parts[0] + ":" + parts[1]);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return """
+               Repositorio Maven Central disponible en línea.
+               Para consultar versiones exactas y actualizadas de cualquier dependencia, utiliza la herramienta 'consultarDependenciasMaven' indicando las coordenadas (por ejemplo: 'software.amazon.awssdk:dynamodb', 'com.amazonaws:aws-java-sdk-sqs', 'software.amazon.awssdk:bom').
+               """;
+    }
+
+    private String resolverYConsultarMaven(String query) {
+        try {
+            String g = null;
+            String a = null;
+
+            if (query.contains(":")) {
+                String[] parts = query.split(":", 2);
+                g = parts[0].trim();
+                a = parts[1].trim();
+            } else if (query.startsWith("aws-java-sdk-")) {
+                g = "com.amazonaws";
+                a = query;
+            } else if (List.of("dynamodb", "s3", "sqs", "sns", "kms", "secretsmanager", "bom", "apache-client", "netty-nio-client", "cognitoidentityprovider", "s3control").contains(query.toLowerCase())) {
+                g = "software.amazon.awssdk";
+                a = query.toLowerCase();
+            } else if (query.startsWith("spring-boot-starter") || query.startsWith("spring-boot")) {
+                g = "org.springframework.boot";
+                a = query;
+            } else {
+                // Consultar buscador público de Sonatype Central Solr
+                try {
+                    String solrUrl = "https://central.sonatype.com/solrsearch/select?q=" + java.net.URLEncoder.encode(query, StandardCharsets.UTF_8) + "&rows=3&wt=json";
+                    String json = Jsoup.connect(solrUrl)
+                            .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                            .ignoreContentType(true)
+                            .timeout(5000)
+                            .execute()
+                            .body();
+                    com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+                    com.fasterxml.jackson.databind.JsonNode docs = root.path("response").path("docs");
+                    if (docs.isArray() && !docs.isEmpty()) {
+                        g = docs.get(0).path("g").asText(null);
+                        a = docs.get(0).path("a").asText(null);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            if (!StringUtils.hasText(g) || !StringUtils.hasText(a)) {
+                return "No se pudieron determinar las coordenadas Maven para '" + query + "'. Por favor especifica el formato 'groupId:artifactId' (por ejemplo, 'software.amazon.awssdk:dynamodb').";
+            }
+
+            String path = g.replace('.', '/') + "/" + a;
+            String metadataUrl = "https://repo1.maven.org/maven2/" + path + "/maven-metadata.xml";
+
+            org.jsoup.nodes.Document doc = Jsoup.connect(metadataUrl)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .parser(org.jsoup.parser.Parser.xmlParser())
+                    .timeout(6000)
+                    .get();
+
+            String latest = doc.selectFirst("latest") != null ? doc.selectFirst("latest").text() : null;
+            String release = doc.selectFirst("release") != null ? doc.selectFirst("release").text() : latest;
+            String updated = doc.selectFirst("lastUpdated") != null ? doc.selectFirst("lastUpdated").text() : "N/A";
+
+            List<String> versionesRecientes = doc.select("version").stream()
+                    .map(org.jsoup.nodes.Element::text)
+                    .toList();
+
+            List<String> ultimasCinco = versionesRecientes.subList(Math.max(0, versionesRecientes.size() - 5), versionesRecientes.size());
+
+            return String.format(
+                    """
+                    Coordenadas Maven Central: %s:%s
+                    - Última versión (latest): %s
+                    - Última versión estable (release): %s
+                    - Última actualización: %s
+                    - Versiones recientes publicadas: %s
+                    - Repositorio oficial: %s
+                    """,
+                    g, a,
+                    release != null ? release : "No especificada",
+                    release != null ? release : "No especificada",
+                    updated,
+                    String.join(", ", ultimasCinco),
+                    "https://repo1.maven.org/maven2/" + path + "/"
+            );
+
+        } catch (org.jsoup.HttpStatusException e) {
+            if (e.getStatusCode() == 404) {
+                return "El artefacto '" + query + "' no fue encontrado en Maven Central (HTTP 404).";
+            }
+            return "Error al consultar Maven Central: HTTP " + e.getStatusCode();
+        } catch (Exception e) {
+            return "Error al consultar dependencias en Maven Central: " + e.getMessage();
         }
     }
 

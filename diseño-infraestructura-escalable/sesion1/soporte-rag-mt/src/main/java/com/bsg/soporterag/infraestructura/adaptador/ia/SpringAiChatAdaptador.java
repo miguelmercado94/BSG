@@ -15,8 +15,10 @@ public class SpringAiChatAdaptador implements ProveedorChatPort {
     private final PromptsPropiedades prompts;
     private final ChatPropiedades chatPropiedades;
 
-    public SpringAiChatAdaptador(ChatModel chatModel, PromptsPropiedades prompts, ChatPropiedades chatPropiedades) {
-        this.chatClient = ChatClient.builder(chatModel).build();
+    public SpringAiChatAdaptador(ChatModel chatModel, PromptsPropiedades prompts, ChatPropiedades chatPropiedades, com.bsg.soporterag.infraestructura.adaptador.ia.herramientas.HerramientasChat herramientasChat) {
+        this.chatClient = ChatClient.builder(chatModel)
+                .defaultTools(herramientasChat)
+                .build();
         this.prompts = prompts;
         this.chatPropiedades = chatPropiedades;
     }
@@ -38,7 +40,7 @@ public class SpringAiChatAdaptador implements ProveedorChatPort {
                         .param("pregunta", mensajeUsuario));
 
         if (tipoTarea == TipoTareaModelo.RESPONDER) {
-            spec = spec.toolNames("consultarPaginaWeb");
+            spec = spec.toolNames("consultarPaginaWeb", "consultarDependenciasMaven", "obtenerContenidoArchivo", "procesarPropuestaModificacion");
         }
 
         return spec.call().content();
@@ -62,7 +64,7 @@ public class SpringAiChatAdaptador implements ProveedorChatPort {
                         .user(userSpec -> userSpec.text(prompts.usuario())
                                 .param("contexto", contextoExtraido)
                                 .param("pregunta", mensajeUsuario))
-                        .toolNames("consultarPaginaWeb", "obtenerContenidoArchivo", "procesarPropuestaModificacion")
+                        .toolNames("consultarPaginaWeb", "consultarDependenciasMaven", "obtenerContenidoArchivo", "procesarPropuestaModificacion")
                         .call()
                         .content();
                 // Emitir en chunks de ~100 chars para efecto de streaming
