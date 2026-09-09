@@ -10,7 +10,12 @@ export DOCVIZ_UPSTREAM="${DOCVIZ_UPSTREAM:-http://backend:8080}"
 export SECURITY_UPSTREAM="${SECURITY_UPSTREAM:-http://back-security:8081}"
 # Resolver DNS: Railway / Docker embebido | VPC AWS (Fargate). Ver default.conf.template (resolver + proxy_pass variable).
 SYS_RESOLVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
-export NGINX_RESOLVER="${NGINX_RESOLVER:-${SYS_RESOLVER:-127.0.0.11}}"
+if [ -n "$SYS_RESOLVER" ]; then
+  case "$SYS_RESOLVER" in
+    *:*) SYS_RESOLVER="[$SYS_RESOLVER]" ;;
+  esac
+fi
+export NGINX_RESOLVER="${NGINX_RESOLVER:-${SYS_RESOLVER:-1.1.1.1}}"
 
 # proxy_pass con URL completa en una variable puede dar 500 en Nginx; separar host y puerto:
 # proxy_pass http://$host:puerto (solo el nombre en variable → DNS Cloud Map por petición).
