@@ -13,23 +13,25 @@ spring:
 
       # Rutas explicitas hacia los microservicios
       routes:
-        # back-security: /api/auth/**, /api/users/**, /security-auth/**
+        # back-security: autenticación, usuarios y estado de salud público
         - id: back-security
           uri: ${SECURITY_SERVICE_URI:http://back-security-sesion1.railway.internal:8080}
           predicates:
-            - Path=/api/auth/**, /api/users/**, /security-auth/**
+            - Path=/api/public/**, /api/v1/auth/**, /api/v1/customers/**, /security-auth/**
           filters:
-            - RewritePath=/api/auth/(?<segment>.*), /security-auth/auth/${segment}
-            - RewritePath=/api/users/(?<segment>.*), /security-auth/users/${segment}
+            - RewritePath=/security-auth/auth/(?<segment>.*), /api/v1/auth/${segment}
+            - RewritePath=/security-auth/users/(?<segment>.*), /api/v1/customers/${segment}
+            - RewritePath=/security-auth/(?<segment>.*), /api/v1/${segment}
 
-        # soporte-rag-mt (core): /api/rag/**, /api/chat/**, /docviz/**
+        # soporte-rag-mt (core): RAG, celulas, repositorios, soportes, tareas, workspace
         - id: soporte-rag-mt
           uri: ${SOPORTE_RAG_URI:http://soporte-rag-mt.railway.internal:8080}
           predicates:
-            - Path=/api/rag/**, /api/chat/**, /docviz/**
+            - Path=/api/v1/**, /api/rag/**, /api/chat/**, /docviz/**
           filters:
-            - RewritePath=/api/rag/(?<segment>.*), /docviz/api/v1/soporte/${segment}
-            - RewritePath=/api/chat/(?<segment>.*), /docviz/api/v1/soporte/chat/${segment}
+            - RewritePath=/api/rag/(?<segment>.*), /api/v1/soportes/${segment}
+            - RewritePath=/api/chat/(?<segment>.*), /api/v1/soportes/chat/${segment}
+            - RewritePath=/docviz/(?<segment>.*), /${segment}
 
       # Discovery automático desactivado (descubrimiento vía DNS privado Railway)
       discovery:
