@@ -49,7 +49,11 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
         String path = request.getPath().pathWithinApplication().value();
 
         // 1. Rutas de auth pasan directo (el micro security se protege internamente)
-        if (path.startsWith("/security-auth") || path.startsWith("/api/auth")) {
+        if (path.startsWith("/security-auth")
+                || path.startsWith("/api/auth")
+                || path.startsWith("/api/v1/auth")
+                || path.startsWith("/api/v1/customers")
+                || path.startsWith("/api/public")) {
             return chain.filter(exchange);
         }
 
@@ -68,7 +72,7 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
 
         // 4. Llamar a back-security para validar el token
         return securityClient.get()
-                .uri("/security-auth/api/v1/auth/validate")
+                .uri("/api/v1/auth/validate")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                 .retrieve()
                 .bodyToMono(ValidateResponse.class)
@@ -117,7 +121,10 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
 
     private boolean isPublicPath(String path) {
         return path.equals("/docviz/api/v1/infraestructura/salud")
-                || path.startsWith("/docviz/actuator");
+                || path.equals("/api/v1/infraestructura/salud")
+                || path.startsWith("/api/public/")
+                || path.startsWith("/docviz/actuator")
+                || path.startsWith("/actuator");
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange) {
