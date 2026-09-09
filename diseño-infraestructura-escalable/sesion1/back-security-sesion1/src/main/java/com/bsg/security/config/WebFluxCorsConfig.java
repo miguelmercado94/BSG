@@ -1,5 +1,6 @@
 package com.bsg.security.config;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.cors.CorsConfiguration;
@@ -9,9 +10,11 @@ import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 import java.util.List;
 
 /**
- * CORS para el SPA (Vite, Docker nginx) y futuro API Gateway llamando al micro en otro origen/puerto.
+ * CORS local para desarrollo standalone sin API Gateway.
+ * Deshabilitado por defecto cuando se opera detrás del API Gateway para evitar cabeceras CORS duplicadas.
  */
 @Configuration
+@ConditionalOnProperty(name = "security.cors.enabled", havingValue = "true", matchIfMissing = false)
 public class WebFluxCorsConfig {
 
     @Bean
@@ -21,7 +24,7 @@ public class WebFluxCorsConfig {
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setExposedHeaders(List.of("Authorization", "X-JWT-Algorithm"));
-        config.setAllowCredentials(false);
+        config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return new CorsWebFilter(source);
