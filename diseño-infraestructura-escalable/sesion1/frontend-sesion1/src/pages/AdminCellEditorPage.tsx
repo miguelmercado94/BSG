@@ -26,6 +26,7 @@ import {
   fetchCells,
   fetchRepoBranches,
   fetchTextFromPresignedUrl,
+  fetchSupportMarkdownContent,
   fetchTags,
   getUserId,
   isSupportRole,
@@ -737,7 +738,7 @@ export function AdminCellEditorPage() {
     setViewerLoading(true);
     setErr(null);
     try {
-      const text = await fetchTextFromPresignedUrl(url);
+      const text = await fetchSupportMarkdownContent(fileName, url);
       setViewer({ kind: "support", repoId, fileName, content: text });
       setViewerDraft(text);
     } catch (ex) {
@@ -767,7 +768,7 @@ export function AdminCellEditorPage() {
   }
 
   async function deleteSupportRow(row: SupportRow) {
-    const label = row.obj.fileName;
+    const label = row.obj.displayLabel || row.obj.fileName;
     if (!window.confirm(`¿Eliminar el soporte «${label}» y su indexación?`)) return;
     setErr(null);
     try {
@@ -776,6 +777,7 @@ export function AdminCellEditorPage() {
       } else {
         await adminDeletePendingSupportMarkdown(row.repoId, row.obj.fileName);
       }
+      setSupportRows((prev) => prev.filter((r) => r.obj.fileName !== row.obj.fileName));
       if (viewer?.kind === "support" && viewer.fileName === row.obj.fileName) {
         setViewer(null);
       }

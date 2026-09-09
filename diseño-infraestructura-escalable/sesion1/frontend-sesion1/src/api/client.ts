@@ -1285,6 +1285,24 @@ export async function fetchTextFromPresignedUrl(url: string, init?: { signal?: A
   return res.text();
 }
 
+/** Descarga contenido Markdown de soporte vía endpoint del backend /contenido (seguro y sin problemas de red interna). */
+export async function fetchSupportMarkdownContent(codigo: string, fallbackUrl?: string): Promise<string> {
+  try {
+    const res = await fetch(`${apiBase()}/api/v1/soportes/${encodeURIComponent(codigo)}/contenido`, {
+      headers: headers(),
+    });
+    if (res.ok) {
+      return await res.text();
+    }
+  } catch (e) {
+    console.warn("fetchSupportMarkdownContent via API falló, probando presigned url", e);
+  }
+  if (fallbackUrl && !fallbackUrl.includes(".railway.internal") && !fallbackUrl.includes("localhost")) {
+    return await fetchTextFromPresignedUrl(fallbackUrl);
+  }
+  throw new Error("No se pudo cargar el contenido del documento de soporte.");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tags — mapped to soporte-rag-mt /api/v1/tags
 // ─────────────────────────────────────────────────────────────────────────────

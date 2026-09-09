@@ -58,4 +58,11 @@ public class GestionarSoporteControlador {
             @Parameter(description = "URL del repositorio a consultar", required = true) @RequestParam String urlRepo) {
         return gestionarSoporteCasoUso.obtenerTodosPorUrlRepo(urlRepo);
     }
+
+    @Operation(summary = "Obtener contenido en texto del documento de soporte", description = "Descarga y devuelve el texto Markdown directamente desde almacenamiento (S3/MinIO).")
+    @GetMapping(value = "/{codigo}/contenido", produces = "text/markdown;charset=UTF-8")
+    public Mono<String> obtenerContenido(
+            @Parameter(description = "Código del documento de soporte", required = true) @PathVariable String codigo) {
+        return gestionarSoporteCasoUso.obtenerContenido(codigo);
+    }
 }

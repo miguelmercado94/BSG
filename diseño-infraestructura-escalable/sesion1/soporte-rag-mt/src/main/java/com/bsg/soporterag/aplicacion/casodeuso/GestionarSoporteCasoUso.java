@@ -17,4 +17,6 @@ public interface GestionarSoporteCasoUso {
     Mono<SoporteResponseDto> obtenerPorCodigo(String codigo);
 
     Flux<SoporteResponseDto> obtenerTodosPorUrlRepo(String urlRepo);
+
+    Mono<String> obtenerContenido(String codigo);
 }

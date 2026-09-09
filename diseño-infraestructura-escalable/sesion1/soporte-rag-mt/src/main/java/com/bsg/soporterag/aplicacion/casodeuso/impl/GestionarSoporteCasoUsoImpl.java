@@ -78,10 +78,26 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
                                                 .onErrorResume(e3 -> Mono.empty())
                                                 .then(Mono.error(new RuntimeException("Fallo al procesar el embedding: " + e.getMessage())));
                                     })
-                                    .thenReturn(soporteGuardado);
+                                    .then(marcarComoIndexado(soporteGuardado));
                             });
                 })
                 .flatMap(this::enriquecerConPresigned);
+    }
+
+    private Mono<DocumentoSoporte> marcarComoIndexado(DocumentoSoporte soporte) {
+        DocumentoSoporte indexado = new DocumentoSoporte(
+                soporte.id(),
+                soporte.codigoSoporte(),
+                soporte.urlRepo(),
+                soporte.nombre(),
+                soporte.descripcion(),
+                soporte.namespaceVectorial(),
+                soporte.urlBucketS3(),
+                soporte.bucketRol(),
+                true,
+                Instant.now()
+        );
+        return documentoSoporteServicio.actualizar(soporte.codigoSoporte(), indexado);
     }
 
     @Override
@@ -131,9 +147,17 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
     public Mono<SoporteResponseDto> eliminar(String codigo) {
         return documentoSoporteServicio.obtenerPorCodigo(codigo)
                 .flatMap(soporte -> servicioEmbedding.eliminarEmbedding(true, soporte.namespaceVectorial(), soporte.codigoSoporte())
+                        .onErrorResume(e -> {
+                            log.warn("No se pudo eliminar embedding para soporte {}: {}", codigo, e.getMessage());
+                            return Mono.empty();
+                        })
                         .then(servicioBucketS3.eliminarCarpeta(RolBucketS3.WORKAREA, soporte.urlBucketS3()))
+                        .onErrorResume(e -> {
+                            log.warn("No se pudo eliminar archivo S3 para soporte {}: {}", codigo, e.getMessage());
+                            return Mono.empty();
+                        })
                         .then(documentoSoporteServicio.eliminar(codigo))
-                        .then(enriquecerConPresigned(soporte))
+                        .thenReturn(soporteMapperDto.aResponse(soporte, soporte.urlRepo()))
                 );
     }
 
@@ -147,6 +171,13 @@ public class GestionarSoporteCasoUsoImpl implements GestionarSoporteCasoUso {
     public Flux<SoporteResponseDto> obtenerTodosPorUrlRepo(String urlRepo) {
         return documentoSoporteServicio.obtenerTodosPorUrlRepo(urlRepo)
                 .flatMap(this::enriquecerConPresigned);
+    }
+
+    @Override
+    public Mono<String> obtenerContenido(String codigo) {
+        return documentoSoporteServicio.obtenerPorCodigo(codigo)
+                .flatMap(soporte -> servicioBucketS3.obtenerArchivo(soporte.bucketRol(), soporte.urlBucketS3()))
+                .map(bytes -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private Mono<SoporteResponseDto> enriquecerConPresigned(DocumentoSoporte soporte) {
