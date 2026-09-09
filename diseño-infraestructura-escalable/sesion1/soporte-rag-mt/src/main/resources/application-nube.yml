@@ -38,7 +38,6 @@ soporte-rag:
   chat:
     models:
       analizar: "gpt-3.5-turbo"
-      resumir: "gpt-4o-mini"
       responder: "gpt-4o"
 
   almacenamiento:
@@ -53,6 +52,9 @@ soporte-rag:
   cache:
     redis:
       enabled: true
+      key-prefix: ${SOPORTE_RAG_REDIS_KEY_PREFIX:soporte-rag:}
+      historial-key-prefix: ${SOPORTE_RAG_REDIS_HISTORIAL_KEY_PREFIX:historial-chat:}
+      historial-ttl-seconds: ${SOPORTE_RAG_REDIS_HISTORIAL_TTL_SECONDS:86400}
 
 logging:
   level:

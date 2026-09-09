@@ -1,9 +1,13 @@
 # Dependencies
 node_modules/
 
-# Java / Maven
+# Java / Maven / Gradle
 target/
 *.class
+.gradle/
+**/.gradle/
+build/
+**/build/
 
 # Frontend build
 dist/

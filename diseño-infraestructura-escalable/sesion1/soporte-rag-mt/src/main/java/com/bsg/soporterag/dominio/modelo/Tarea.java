@@ -18,7 +18,6 @@ public class Tarea {
     private String codigoTarea;
     private String titulo;
     private String enunciadoPrincipal;
-    private String resumen;
     private EstadoTarea estadoTarea;
     private String urlFolderS3Borradores;
     private List<MensajeChat> msgChat = new ArrayList<>();

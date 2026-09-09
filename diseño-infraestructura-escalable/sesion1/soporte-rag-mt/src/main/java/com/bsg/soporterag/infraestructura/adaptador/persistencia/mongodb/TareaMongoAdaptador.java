@@ -6,7 +6,6 @@ import com.bsg.soporterag.dominio.puerto.salida.TareaRepositorioPort;
 import com.bsg.soporterag.infraestructura.adaptador.persistencia.mongodb.documento.TareaDocumento;
 import com.bsg.soporterag.infraestructura.adaptador.persistencia.mongodb.mapper.TareaDocumentoMapper;
 import com.bsg.soporterag.infraestructura.adaptador.persistencia.mongodb.repositorio.TareaRepositorioMongo;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -71,13 +70,5 @@ public class TareaMongoAdaptador implements TareaRepositorioPort {
         Query query = new Query(Criteria.where("codigo_tarea").is(codigoTarea));
         Update update = new Update().push("msg_chat", mapper.mensajeChatADocumento(mensaje));
         return mongoTemplate.updateFirst(query, update, TareaDocumento.class).then();
-    }
-
-    @Override
-    public Mono<Tarea> actualizarResumen(String codigoTarea, String resumen) {
-        Query query = new Query(Criteria.where("codigo_tarea").is(codigoTarea));
-        Update update = new Update().set("resumen", resumen);
-        return mongoTemplate.findAndModify(query, update, new FindAndModifyOptions().returnNew(true), TareaDocumento.class)
-                .map(mapper::aDominio);
     }
 }

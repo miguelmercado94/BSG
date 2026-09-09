@@ -29,7 +29,7 @@ public class SpringAiChatAdaptador implements ProveedorChatPort {
             options.setModel(modeloEspecifico);
         }
 
-        // Para ANALIZAR y RESUMIR no se necesitan tools (solo para RESPONDER)
+        // Para ANALIZAR no se necesitan tools (solo para RESPONDER)
         var spec = this.chatClient.prompt()
                 .options(options)
                 .system(prompts.sistema())
@@ -84,7 +84,7 @@ public class SpringAiChatAdaptador implements ProveedorChatPort {
             }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
         }
 
-        // Para otros tipos (analizar, resumir) — stream real sin tools
+        // Para otros tipos (analizar) — stream real sin tools
         return this.chatClient.prompt()
                 .options(options)
                 .system(prompts.sistema())
@@ -101,7 +101,6 @@ public class SpringAiChatAdaptador implements ProveedorChatPort {
         }
         return switch (tipoTarea) {
             case ANALIZAR -> chatPropiedades.models().getOrDefault("analizar", null);
-            case RESUMIR -> chatPropiedades.models().getOrDefault("resumir", null);
             case RESPONDER -> chatPropiedades.models().getOrDefault("responder", null);
         };
     }

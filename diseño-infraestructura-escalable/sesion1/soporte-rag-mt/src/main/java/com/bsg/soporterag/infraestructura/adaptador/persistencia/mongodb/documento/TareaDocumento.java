@@ -42,9 +42,6 @@ public class TareaDocumento {
     @Field("enunciado_principal")
     private String enunciadoPrincipal;
 
-    @Field("resumen")
-    private String resumen;
-
     @Field("estado_tarea")
     private EstadoTarea estadoTarea;
 

@@ -18,6 +18,4 @@ public interface TareaServicio {
     Flux<Tarea> obtenerTareasPorUsuario(String codigoUsuario);
 
     Mono<Void> agregarMensajeChat(String codigoTarea, MensajeChat mensaje);
-
-    Mono<Tarea> actualizarResumen(String codigoTarea, String resumen);
 }

@@ -24,7 +24,6 @@ public class TareaDocumentoMapper {
         dominio.setCodigoTarea(documento.getCodigoTarea());
         dominio.setTitulo(documento.getTitulo());
         dominio.setEnunciadoPrincipal(documento.getEnunciadoPrincipal());
-        dominio.setResumen(documento.getResumen());
         dominio.setEstadoTarea(documento.getEstadoTarea());
         dominio.setUrlFolderS3Borradores(documento.getUrlFolderS3Borradores());
 
@@ -50,7 +49,6 @@ public class TareaDocumentoMapper {
         documento.setCodigoTarea(dominio.getCodigoTarea());
         documento.setTitulo(dominio.getTitulo());
         documento.setEnunciadoPrincipal(dominio.getEnunciadoPrincipal());
-        documento.setResumen(dominio.getResumen());
         documento.setEstadoTarea(dominio.getEstadoTarea());
         documento.setUrlFolderS3Borradores(dominio.getUrlFolderS3Borradores());
 

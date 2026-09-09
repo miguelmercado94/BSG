@@ -10,8 +10,14 @@ public interface InteractuarChatCasoUso {
     Mono<MensajeChatDto> conversar(String codigoTarea, ChatRequestDto request);
 
     /**
-     * Streaming SSE: emite tokens progresivamente. Al finalizar persiste el mensaje completo
-     * y dispara el rolling summary si corresponde.
+     * Streaming SSE/WebSocket: emite tokens progresivamente. Al finalizar persiste el mensaje
+     * completo y refresca la cache del historial.
      */
     Flux<String> conversarStream(String codigoTarea, ChatRequestDto request);
+
+    /**
+     * Historial de la conversación de una HU ya formateado como texto (últimos mensajes).
+     * Usado al activar un canal WebSocket para pintar la conversación previa.
+     */
+    Mono<String> obtenerHistorialFormateado(String codigoTarea);
 }

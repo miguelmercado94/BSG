@@ -20,6 +20,4 @@ public interface TareaRepositorioPort {
     Mono<Void> eliminar(String id);
 
     Mono<Void> agregarMensajeChat(String codigoTarea, MensajeChat mensaje);
-
-    Mono<Tarea> actualizarResumen(String codigoTarea, String resumen);
 }

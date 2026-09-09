@@ -71,7 +71,6 @@ soporte-rag:
   chat:
     models:
       analizar: ${SOPORTE_RAG_CHAT_MODEL_ANALIZAR:llama3.1:8b}
-      resumir: ${SOPORTE_RAG_CHAT_MODEL_RESUMIR:llama3.1:8b}
       responder: ${SOPORTE_RAG_CHAT_MODEL_RESPONDER:llama3.1:8b}
 
   almacenamiento:
@@ -94,6 +93,8 @@ soporte-rag:
     redis:
       enabled: ${SOPORTE_RAG_REDIS_ENABLED:false}
       key-prefix: ${SOPORTE_RAG_REDIS_KEY_PREFIX:soporte-rag:}
+      historial-key-prefix: ${SOPORTE_RAG_REDIS_HISTORIAL_KEY_PREFIX:historial-chat:}
+      historial-ttl-seconds: ${SOPORTE_RAG_REDIS_HISTORIAL_TTL_SECONDS:86400}
 
 management:
   endpoints:

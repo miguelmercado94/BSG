@@ -1773,9 +1773,39 @@ export async function vectorChat(question: string): Promise<VectorChatResponse> 
 const REST_RAG_DELTA_CHUNK = 480;
 
 /**
- * Chat RAG vía POST /api/v1/tareas/{codigoTarea}/chat.
- * El historial se alinea con HU / conversationId / tarea / célula.
- * Streaming real via SSE (text/event-stream): el backend emite tokens progresivamente.
+ * Construye la URL base del WebSocket a partir de apiBase().
+ * apiBase() suele ser relativo ("/api"): se resuelve contra el origen actual y se cambia el
+ * esquema http(s) → ws(s). El proxy Nginx del frontend reescribe /api/ → /docviz/ y hace el
+ * upgrade; el gateway enruta /docviz/ws/** a soporte-rag-mt.
+ */
+function wsBase(): string {
+  const base = apiBase(); // p. ej. "/api" o "https://host/api"
+  let url: URL;
+  if (/^https?:\/\//i.test(base)) {
+    url = new URL(base);
+  } else {
+    // Relativo: resolver contra el origen del navegador.
+    url = new URL(base.startsWith("/") ? base : `/${base}`, window.location.origin);
+  }
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString().replace(/\/$/, "");
+}
+
+/** Tipos de mensaje que el servidor envía por el WebSocket del chat. */
+type MensajeSalienteWs = {
+  tipo: "CANAL_ACTIVADO" | "HISTORIAL" | "TOKEN" | "FIN" | "CANAL_CERRADO" | "ERROR";
+  contenido?: string;
+  codigoTarea?: string;
+  motivo?: string;
+};
+
+/**
+ * Chat RAG vía WebSocket: canal por HU (código de tarea).
+ * Abre wss://.../ws/chat/{taskId}?token=<jwt>, envía {tipo:"MENSAJE",contenido} y recibe
+ * TOKEN* + FIN. Al activar el canal el servidor cierra los demás canales del mismo usuario.
+ *
+ * Mantiene la misma firma que la versión SSE anterior para no cambiar los llamadores:
+ * onStart al abrir, onDelta por cada token, y resuelve la promesa al recibir FIN.
  */
 export async function streamVectorChat(
   question: string,
@@ -1801,60 +1831,70 @@ export async function streamVectorChat(
     return Promise.reject(new Error("El mensaje no puede estar vacío."));
   }
 
+  const token = getAccessToken();
+  const qs = new URLSearchParams();
+  if (token) qs.set("token", token);
+  qs.set("usuario", uid); // fallback local si el gateway no inyecta X-User-Id
+  const url = `${wsBase()}/ws/chat/${encodeURIComponent(options.taskId)}?${qs.toString()}`;
+
   handlers.onStart([]);
 
-  // SSE streaming via POST /chat/stream (text/event-stream)
-  const res = await fetch(`${apiBase()}/api/v1/tareas/${options.taskId}/chat/stream`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ mensaje: trimmedQuestion }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text || res.statusText;
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let ws: WebSocket;
     try {
-      const j = JSON.parse(text) as { detail?: string; message?: string; error?: string };
-      msg = j.detail ?? j.message ?? j.error ?? msg;
-    } catch { /* ignore */ }
-    throw new Error(msg);
-  }
+      ws = new WebSocket(url);
+    } catch (e) {
+      reject(e instanceof Error ? e : new Error(String(e)));
+      return;
+    }
 
-  if (!res.body) {
-    throw new Error("El servidor no devolvió un stream.");
-  }
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch { /* noop */ }
+      if (err) reject(err); else resolve();
+    };
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ tipo: "MENSAJE", contenido: trimmedQuestion }));
+    };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // SSE format: "data:token\n\n" — parse individual data lines
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || ""; // keep incomplete line in buffer
-
-    for (const line of lines) {
-      if (line.startsWith("data:")) {
-        const token = line.slice(5); // strip "data:" prefix
-        if (token.trim()) {
-          handlers.onDelta(token);
-        }
+    ws.onmessage = (ev) => {
+      let msg: MensajeSalienteWs;
+      try {
+        msg = JSON.parse(typeof ev.data === "string" ? ev.data : "") as MensajeSalienteWs;
+      } catch {
+        return; // ignora frames no-JSON
       }
-    }
-  }
+      switch (msg.tipo) {
+        case "TOKEN":
+          if (msg.contenido) handlers.onDelta(msg.contenido);
+          break;
+        case "FIN":
+          finish();
+          break;
+        case "CANAL_CERRADO":
+          finish(new Error(msg.motivo || "El canal se cerró (se activó otro canal)."));
+          break;
+        case "ERROR":
+          finish(new Error(msg.motivo || "Error en el chat."));
+          break;
+        // CANAL_ACTIVADO e HISTORIAL: informativos; el historial se pinta con fetchChatHistory.
+        default:
+          break;
+      }
+    };
 
-  // Process any remaining buffer
-  if (buffer.startsWith("data:")) {
-    const token = buffer.slice(5);
-    if (token.trim()) {
-      handlers.onDelta(token);
-    }
-  }
+    ws.onerror = () => {
+      finish(new Error("No se pudo conectar al canal de chat (WebSocket)."));
+    };
+
+    ws.onclose = () => {
+      // Si el socket se cierra sin FIN previo, resolvemos igualmente para no colgar la UI.
+      finish();
+    };
+  });
 }
 
 export type FetchChatHistoryParams = {

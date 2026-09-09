@@ -79,7 +79,7 @@ export function UserPage() {
   }
 
   return (
-    <div className="page connect-page">
+    <div className="page connect-page page--auth">
       <header className="page__header">
         <h1>DocViz</h1>
         <p className="muted">

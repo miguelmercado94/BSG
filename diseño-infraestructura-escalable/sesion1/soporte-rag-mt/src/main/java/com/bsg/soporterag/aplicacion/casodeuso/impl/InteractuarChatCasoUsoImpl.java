@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
 
     private static final Logger log = LoggerFactory.getLogger(InteractuarChatCasoUsoImpl.class);
-    private static final int RESUMEN_CADA_N_MENSAJES = 20;
+    private static final int MAX_MENSAJES_HISTORIAL = 20;
     private static final Pattern REFERENCIA_PATTERN = Pattern.compile("\\[@(repo|soporte)/([^\\]]+)\\]");
 
 
@@ -41,6 +41,7 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
     private final ServicioJGit servicioJGit;
     private final ServicioBucketS3 servicioBucketS3;
     private final com.bsg.soporterag.dominio.puerto.salida.AlmacenVectorialPort almacenVectorialPort;
+    private final com.bsg.soporterag.dominio.puerto.salida.HistorialChatCachePort historialChatCachePort;
 
     public InteractuarChatCasoUsoImpl(
             TareaServicio tareaServicio,
@@ -52,7 +53,8 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
             TareaDtoMapper tareaDtoMapper, 
             ServicioJGit servicioJGit, 
             ServicioBucketS3 servicioBucketS3,
-            com.bsg.soporterag.dominio.puerto.salida.AlmacenVectorialPort almacenVectorialPort) {
+            com.bsg.soporterag.dominio.puerto.salida.AlmacenVectorialPort almacenVectorialPort,
+            com.bsg.soporterag.dominio.puerto.salida.HistorialChatCachePort historialChatCachePort) {
         this.tareaServicio = tareaServicio;
         this.repositorioServicio = repositorioServicio;
         this.tagServicio = tagServicio;
@@ -63,6 +65,7 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
         this.servicioJGit = servicioJGit;
         this.servicioBucketS3 = servicioBucketS3;
         this.almacenVectorialPort = almacenVectorialPort;
+        this.historialChatCachePort = historialChatCachePort;
     }
 
     @Override
@@ -98,11 +101,13 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                                                 .defaultIfEmpty("No se encontró información en la base de datos de conocimiento.")
                                             : Mono.just("");
                                     
-                                    String contextoHistorial = analisis.isRequiereHistorialChat() ? construirContextoHistorial(tarea) : "";
+                                    Mono<String> contextoHistorialMono = analisis.isRequiereHistorialChat()
+                                            ? construirContextoHistorial(tarea)
+                                            : Mono.just("");
 
-                                    respuestaIAMono = Mono.zip(contextoRagMono, contextoDeReferencias)
+                                    respuestaIAMono = Mono.zip(contextoRagMono, contextoDeReferencias, contextoHistorialMono)
                                             .flatMap(tuple -> {
-                                                String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), contextoHistorial).trim();
+                                                String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), tuple.getT3()).trim();
                                                 return chatServicio.conversar(codigoTarea, request.getMensaje(), contextoFinal);
                                             });
 
@@ -111,7 +116,7 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                                 }
 
                                 return respuestaIAMono.flatMap(respuestaIA -> 
-                                        guardarYProcesarResumen(tarea, request.getMensaje(), respuestaIA));
+                                        guardarMensaje(tarea, request.getMensaje(), respuestaIA));
                             });
                 })
                 .map(tareaDtoMapper::aDto);
@@ -153,24 +158,32 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
 
     private record ReferenciaContexto(String tipo, String ruta) {}
 
-    // ... resto de métodos ...
-    private String construirContextoHistorial(Tarea tarea) {
-        String resumenPrevio = tarea.getResumen() != null ? "Resumen de la conversación hasta ahora:\n" + tarea.getResumen() + "\n\n" : "";
-        
-        List<MensajeChat> mensajes = tarea.getMsgChat();
-        if (mensajes == null || mensajes.isEmpty()) {
-            return resumenPrevio;
-        }
+    /**
+     * Construye el contexto histórico para el LLM leyendo primero de Redis (cache por HU).
+     * Si hay miss (o Redis apagado), cae a MongoDB usando el historial ya cargado en la tarea
+     * y rehidrata la cache para las siguientes consultas (read-through).
+     */
+    private Mono<String> construirContextoHistorial(Tarea tarea) {
+        return historialChatCachePort.obtenerHistorial(tarea.getCodigoTarea())
+                .doOnNext(m -> log.debug("Historial de tarea={} servido desde cache Redis", tarea.getCodigoTarea()))
+                .switchIfEmpty(Mono.defer(() -> {
+                    List<MensajeChat> mensajesBd = tarea.getMsgChat() != null ? tarea.getMsgChat() : List.of();
+                    // Rehidrata la cache con lo que hay en BD (no bloquea la respuesta).
+                    return historialChatCachePort.guardarHistorial(tarea.getCodigoTarea(), mensajesBd)
+                            .thenReturn(mensajesBd);
+                }))
+                .map(this::formatearHistorial);
+    }
 
-        int mensajesNoResumidosCount = mensajes.size() % RESUMEN_CADA_N_MENSAJES;
-        String mensajesRecientes = "";
-        if (mensajesNoResumidosCount > 0) {
-            int inicio = mensajes.size() - mensajesNoResumidosCount;
-            mensajesRecientes = "Últimos mensajes (no resumidos):\n" + mensajes.subList(inicio, mensajes.size()).stream()
-                    .map(msg -> "Usuario: " + msg.getTextoEntrada() + "\nAsistente: " + msg.getTextoRespuesta())
-                    .collect(Collectors.joining("\n"));
+    private String formatearHistorial(List<MensajeChat> mensajes) {
+        if (mensajes == null || mensajes.isEmpty()) {
+            return "";
         }
-        return (resumenPrevio + mensajesRecientes).trim();
+        int inicio = Math.max(0, mensajes.size() - MAX_MENSAJES_HISTORIAL);
+        String mensajesRecientes = "Últimos mensajes:\n" + mensajes.subList(inicio, mensajes.size()).stream()
+                .map(msg -> "Usuario: " + msg.getTextoEntrada() + "\nAsistente: " + msg.getTextoRespuesta())
+                .collect(Collectors.joining("\n"));
+        return mensajesRecientes.trim();
     }
 
     private Mono<String> obtenerHerramientasDisponibles(Tarea tarea) {
@@ -188,30 +201,22 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                 });
     }
 
-    private Mono<MensajeChat> guardarYProcesarResumen(Tarea tarea, String mensajeUsuario, String respuestaIA) {
+    private Mono<MensajeChat> guardarMensaje(Tarea tarea, String mensajeUsuario, String respuestaIA) {
         MensajeChat nuevoMensaje = new MensajeChat(
                 mensajeUsuario, null, respuestaIA, LocalDate.now(), Instant.now());
 
+        // Write-through: 1) persistir en BD (fuente de verdad) 2) refrescar cache Redis del historial por HU.
         return tareaServicio.agregarMensajeChat(tarea.getCodigoTarea(), nuevoMensaje)
                 .then(tareaServicio.obtenerPorCodigo(tarea.getCodigoTarea()))
-                .flatMap(tareaActualizada -> {
-                    int totalMensajes = tareaActualizada.getMsgChat().size();
-                    if (totalMensajes > 0 && totalMensajes % RESUMEN_CADA_N_MENSAJES == 0) {
-                        log.info("Disparando generación de resumen para la tarea {} al alcanzar {} mensajes.", tarea.getCodigoTarea(), totalMensajes);
-                        dispararResumen(tareaActualizada).subscribe();
-                    }
-                    return Mono.just(nuevoMensaje);
-                });
-    }
-
-    private Mono<Void> dispararResumen(Tarea tarea) {
-        String contextoResumen = construirContextoHistorial(tarea);
-        if (contextoResumen.isEmpty()) {
-            return Mono.empty();
-        }
-        return chatServicio.resumirConversacion(tarea.getCodigoTarea() + "_resumen", contextoResumen)
-                .flatMap(nuevoResumen -> tareaServicio.actualizarResumen(tarea.getCodigoTarea(), nuevoResumen))
-                .then();
+                .flatMap(tareaActualizada -> historialChatCachePort
+                        .guardarHistorial(tareaActualizada.getCodigoTarea(),
+                                tareaActualizada.getMsgChat() != null ? tareaActualizada.getMsgChat() : List.of())
+                        .onErrorResume(e -> {
+                            log.warn("No se pudo refrescar cache de historial para tarea={}: {}",
+                                    tarea.getCodigoTarea(), e.getMessage());
+                            return Mono.empty();
+                        }))
+                .thenReturn(nuevoMensaje);
     }
 
     @Override
@@ -239,12 +244,12 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                             .collect(Collectors.joining("\n---\n"))
                             .defaultIfEmpty("");
 
-                    // 3. Historial (rolling summary + mensajes recientes)
-                    String contextoHistorial = construirContextoHistorial(tarea);
+                    // 3. Historial servido desde Redis (cache por HU) con fallback a Mongo
+                    Mono<String> contextoHistorialMono = construirContextoHistorial(tarea);
 
                     // 4. Combinar todo: referencias + RAG + historial → stream a GPT
-                    return Mono.zip(contextoRagMono, contextoDeReferencias).flatMapMany(tuple -> {
-                        String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), contextoHistorial).trim();
+                    return Mono.zip(contextoRagMono, contextoDeReferencias, contextoHistorialMono).flatMapMany(tuple -> {
+                        String contextoFinal = String.join("\n\n", tuple.getT1(), tuple.getT2(), tuple.getT3()).trim();
 
                         Flux<String> tokenStream = contextoFinal.isEmpty()
                                 ? chatServicio.conversarDirectoStream(codigoTarea, request.getMensaje())
@@ -256,7 +261,7 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                                 .doOnNext(respuestaCompleta::append)
                                 .doOnError(err -> log.error("Error en tokenStream para tarea={}", codigoTarea, err))
                                 .doOnComplete(() -> {
-                                    guardarYProcesarResumen(tarea, request.getMensaje(), respuestaCompleta.toString())
+                                    guardarMensaje(tarea, request.getMensaje(), respuestaCompleta.toString())
                                             .subscribe(
                                                     msg -> log.debug("Mensaje persistido para tarea {}", codigoTarea),
                                                     err -> log.error("Error persistiendo mensaje para tarea {}: {}", codigoTarea, err.getMessage())
@@ -264,5 +269,12 @@ public class InteractuarChatCasoUsoImpl implements InteractuarChatCasoUso {
                                 });
                     });
                 });
+    }
+
+    @Override
+    public Mono<String> obtenerHistorialFormateado(String codigoTarea) {
+        return tareaServicio.obtenerPorCodigo(codigoTarea)
+                .flatMap(this::construirContextoHistorial)
+                .defaultIfEmpty("");
     }
 }

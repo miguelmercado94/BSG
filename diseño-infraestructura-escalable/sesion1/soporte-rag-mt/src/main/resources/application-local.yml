@@ -1,15 +1,14 @@
-# Configuración para el perfil 'local' — usa OpenAI para todo (chat + embeddings)
+# Configuración para el perfil 'local' — usa Ollama para chat y embeddings
 spring:
   ai:
-    openai:
-      api-key: ${OPENAI_API_KEY:tu-api-key-aqui}
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       chat:
         options:
-          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+          model: ${OLLAMA_CHAT_MODEL:llama3.1:8b}
       embedding:
         options:
-          model: text-embedding-3-small
-          dimensions: ${SOPORTE_RAG_VECTOR_EMBEDDING_DIM:768}
+          model: ${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
   data:
     mongodb:
       uri: ${MONGODB_URI:mongodb://localhost:27017/soporte_rag}
@@ -18,13 +17,12 @@ spring:
 
 soporte-rag:
   vector:
-    embeddings-provider: spring-ai
+    embeddings-provider: spring-ollama
     embedding-dimensions: ${SOPORTE_RAG_VECTOR_EMBEDDING_DIM:768}
   chat:
     models:
-      analizar: gpt-3.5-turbo
-      resumir: gpt-4o-mini
-      responder: gpt-4o
+      analizar: ${SOPORTE_RAG_CHAT_MODEL_ANALIZAR:llama3.1:8b}
+      responder: ${SOPORTE_RAG_CHAT_MODEL_RESPONDER:llama3.1:8b}
   almacenamiento:
     s3:
       endpoint: ${SOPORTE_RAG_S3_ENDPOINT:http://localhost:4566}

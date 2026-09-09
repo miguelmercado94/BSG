@@ -38,9 +38,9 @@ services:
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
-      timeout: 5s
+      timeout: 20s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
 
   redis:
@@ -181,6 +181,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       SOPORTE_RAG_REDIS_ENABLED: "true"
+      SOPORTE_RAG_REDIS_HISTORIAL_KEY_PREFIX: "historial-chat:"
+      SOPORTE_RAG_REDIS_HISTORIAL_TTL_SECONDS: "86400"
       SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_CHAT_MODEL: llama3.1:8b
@@ -195,7 +197,6 @@ services:
       EUREKA_URL: http://eureka:8761/eureka/
       OPENAI_API_KEY: ${OPENAI_API_KEY:-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}
       SOPORTE_RAG_CHAT_MODEL_ANALIZAR: gpt-4o-mini
-      SOPORTE_RAG_CHAT_MODEL_RESUMIR: gpt-4o-mini
       SOPORTE_RAG_CHAT_MODEL_RESPONDER: gpt-4o-mini
     depends_on:
       postgres:

@@ -58,14 +58,13 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
             return chain.filter(exchange);
         }
 
-        // 3. Validar JWT para rutas protegidas
-        String authHeader = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        // 3. Extraer JWT: header Authorization o, en handshakes WebSocket, query param ?token=
+        //    (el navegador no permite cabeceras custom en new WebSocket(...), así que el token viaja en la URL).
+        String token = extraerToken(request, path);
+        if (token == null || token.isBlank()) {
             log.debug("Sin token JWT para path={}", path);
             return unauthorized(exchange);
         }
-
-        String token = authHeader.substring(7);
 
         // 4. Llamar a back-security para validar el token
         return securityClient.get()
@@ -90,6 +89,30 @@ public class AuthenticationGlobalFilter implements GlobalFilter, Ordered {
                     log.error("Error validando token contra back-security: {}", ex.getMessage());
                     return unauthorized(exchange);
                 });
+    }
+
+    /**
+     * Obtiene el JWT. Prioriza el header Authorization: Bearer. Para handshakes WebSocket
+     * (rutas /ws/ con Upgrade: websocket) acepta también el query param ?token=, porque el
+     * navegador no puede enviar cabeceras custom al abrir un WebSocket.
+     */
+    private String extraerToken(ServerHttpRequest request, String path) {
+        String authHeader = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring(7);
+        }
+        if (esHandshakeWebSocket(request, path)) {
+            return request.getQueryParams().getFirst("token");
+        }
+        return null;
+    }
+
+    private boolean esHandshakeWebSocket(ServerHttpRequest request, String path) {
+        if (!path.contains("/ws/")) {
+            return false;
+        }
+        String upgrade = request.getHeaders().getUpgrade();
+        return upgrade != null && "websocket".equalsIgnoreCase(upgrade);
     }
 
     private boolean isPublicPath(String path) {

@@ -1,0 +1,149 @@
+# Override local: reutiliza el Ollama NATIVO del host (Windows) en vez del contenedor.
+# Motivo: ya tienes 'llama3.1:8b' y 'nomic-embed-text' descargados en tu Ollama local (puerto 11434),
+#         así evitamos duplicar el servicio y volver a descargar ~5 GB de modelos.
+#
+# Uso: se aplica automáticamente junto con docker-compose.yml al ejecutar `docker compose up`.
+#
+# - Desactiva los servicios 'ollama' y 'ollama-pull-models' del compose principal.
+# - Apunta 'soporte-rag-mt' al Ollama del host mediante host.docker.internal.
+
+services:
+
+  # Neutralizamos el contenedor de Ollama (usamos el nativo del host).
+  ollama:
+    entrypoint: ["/bin/sh", "-c", "echo 'Ollama contenedor desactivado; se usa el Ollama nativo del host.'; exit 0"]
+    restart: "no"
+    ports: []
+    healthcheck:
+      disable: true
+
+  # Neutralizamos el pull de modelos (ya existen en el host).
+  ollama-pull-models:
+    entrypoint: ["/bin/sh", "-c", "echo 'Pull de modelos omitido; modelos ya presentes en el host.'; exit 0"]
+    depends_on: []
+    restart: "no"
+
+  soporte-rag-mt:
+    # Reapunta al Ollama nativo del host de Windows.
+    environment:
+      SPRING_AI_OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_CHAT_MODEL: llama3.1:8b
+      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
+      SOPORTE_RAG_CHAT_MODEL_ANALIZAR: llama3.1:8b
+      SOPORTE_RAG_CHAT_MODEL_RESPONDER: llama3.1:8b
+      SOPORTE_RAG_EMBEDDINGS_PROVIDER: spring-ollama
+      SOPORTE_RAG_VECTOR_EMBEDDING_DIM: "768"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Quitamos la dependencia del contenedor ollama (ya no es necesario esperar por él).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      eureka:
+        condition: service_healthy
+
+  # =========================================================================
+  # FRONTEND (SPA React + Nginx) — habilitado en local.
+  # Proxifica a través del API GATEWAY (respeta la integración):
+  #   /api/**          -> reescribe a /docviz/**       -> api-gateway:8080
+  #   /security-api/** -> reescribe a /security-auth/** -> api-gateway:8080
+  # El gateway resuelve por Eureka a soporte-rag-mt (y back-security si estuviese levantado).
+  # =========================================================================
+  frontend:
+    profiles: []          # anula el profile "frontend" del compose base para que arranque por defecto
+    build:
+      context: ./frontend-sesion1
+      dockerfile: Dockerfile
+    image: bsg-frontend:latest
+    container_name: bsg-frontend
+    environment:
+      BACKEND_URL: /api
+      SECURITY_URL: /security-api
+      DOCVIZ_UPSTREAM: http://api-gateway:8080
+      SECURITY_UPSTREAM: http://api-gateway:8080
+      NGINX_RESOLVER: "127.0.0.11"
+    ports:
+      - "3000:80"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # =========================================================================
+  # POSTGRES para back-security (base separada de docviz).
+  # back-security usa R2DBC contra bsg_security; recrea schema+data en cada arranque (perfil dev).
+  # =========================================================================
+  postgres-security:
+    image: postgres:16-alpine
+    container_name: bsg-postgres-security
+    environment:
+      POSTGRES_USER: bsg_security
+      POSTGRES_PASSWORD: bsg_security
+      POSTGRES_DB: bsg_security
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgsecdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bsg_security -d bsg_security"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # =========================================================================
+  # BACK-SECURITY — Autenticación JWT (WebFlux + R2DBC), puerto 8081.
+  # No tiene cliente Eureka, por eso el gateway lo alcanza por URL directa (ver api-gateway abajo).
+  # Perfil dev: recrea schema.sql + data.sql (usuarios admin01/soporte01) en cada arranque.
+  # =========================================================================
+  back-security:
+    build:
+      context: ./back-security-sesion1
+      dockerfile: Dockerfile.local
+    image: bsg-back-security:latest
+    container_name: bsg-back-security
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres-security:5432/bsg_security
+      SPRING_R2DBC_USERNAME: bsg_security
+      SPRING_R2DBC_PASSWORD: bsg_security
+      SPRING_SQL_INIT_MODE: always
+      # DynamoDB (revocación de tokens) contra localstack, ya disponible en el stack.
+      BSG_SECURITY_AWS_DYNAMODB_ENABLED: "true"
+      BSG_SECURITY_AWS_DYNAMODB_ENDPOINT: http://localstack:4566
+      BSG_SECURITY_AWS_DYNAMODB_REGION: us-east-1
+      BSG_SECURITY_AWS_DYNAMODB_CREATE_TABLE_IF_NOT_EXISTS: "true"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      BSG_SECURITY_REDIS_ENABLED: "false"
+    depends_on:
+      postgres-security:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8081/security-auth/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
+  # El gateway alcanza back-security por URL directa (no está en Eureka).
+  api-gateway:
+    environment:
+      SECURITY_SERVICE_URI: http://back-security:8081
+      SECURITY_SERVICE_INTERNAL_URI: http://back-security:8081
+
+volumes:
+  pgsecdata:

@@ -85,21 +85,6 @@ public class ChatServicioImpl implements ChatServicio {
     }
 
     @Override
-    public Mono<String> resumirConversacion(String conversacionId, String historialChat) {
-        return Mono.fromCallable(() -> {
-            log.info("[RESUMIDOR] conversacionId='{}' | Historial a resumir: '{}'", conversacionId, historialChat);
-            String response = proveedorChatPort.chatearConContexto(
-                    conversacionId,
-                    "Genera un resumen conciso de la siguiente conversación:",
-                    historialChat,
-                    TipoTareaModelo.RESUMIR
-            );
-            log.info("[RESUMIDOR] Nuevo resumen: '{}'", response);
-            return response;
-        });
-    }
-
-    @Override
     public Flux<String> conversarStream(String conversacionId, String mensaje, String contextoExtraido) {
         log.info("[CHAT-STREAM] conversacionId='{}' | Pregunta: '{}' | Contexto: '{}'", conversacionId, mensaje, contextoExtraido);
         return proveedorChatPort.chatearConContextoStream(

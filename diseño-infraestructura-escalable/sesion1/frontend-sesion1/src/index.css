@@ -142,17 +142,24 @@ a {
 }
 
 .page {
-  max-width: 960px;
-  margin: 0 auto;
+  max-width: 100%;
+  margin: 0;
   padding: clamp(0.75rem, 2.5vw, 1.5rem);
   width: 100%;
   box-sizing: border-box;
 }
 
-.page--workspace {
-  max-width: min(100%, 1400px);
-  width: 100%;
+/* Login / registro: la página va a ancho completo, pero su contenido (header + card)
+   se centra en una columna legible en vez de pegarse a la izquierda. */
+.page--auth {
+  max-width: 720px;
   margin: 0 auto;
+}
+
+.page--workspace {
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
@@ -569,6 +576,10 @@ a {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  /* La página ahora ocupa todo el ancho; acotamos los formularios (login/registro/editor)
+     para que campos y botones no se estiren de forma incómoda en pantallas anchas. */
+  max-width: 720px;
+  width: 100%;
 }
 
 .field {

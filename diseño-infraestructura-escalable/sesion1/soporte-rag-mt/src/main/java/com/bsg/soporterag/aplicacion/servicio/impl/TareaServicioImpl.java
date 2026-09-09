@@ -3,6 +3,7 @@ package com.bsg.soporterag.aplicacion.servicio.impl;
 import com.bsg.soporterag.aplicacion.servicio.TareaServicio;
 import com.bsg.soporterag.dominio.modelo.MensajeChat;
 import com.bsg.soporterag.dominio.modelo.Tarea;
+import com.bsg.soporterag.dominio.puerto.salida.HistorialChatCachePort;
 import com.bsg.soporterag.dominio.puerto.salida.TareaRepositorioPort;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -12,9 +13,13 @@ import reactor.core.publisher.Mono;
 public class TareaServicioImpl implements TareaServicio {
 
     private final TareaRepositorioPort tareaRepositorioPort;
+    private final HistorialChatCachePort historialChatCachePort;
 
-    public TareaServicioImpl(TareaRepositorioPort tareaRepositorioPort) {
+    public TareaServicioImpl(
+            TareaRepositorioPort tareaRepositorioPort,
+            HistorialChatCachePort historialChatCachePort) {
         this.tareaRepositorioPort = tareaRepositorioPort;
+        this.historialChatCachePort = historialChatCachePort;
     }
 
     @Override
@@ -37,7 +42,8 @@ public class TareaServicioImpl implements TareaServicio {
     @Override
     public Mono<Void> eliminarTarea(String codigoTarea) {
         return tareaRepositorioPort.buscarPorCodigo(codigoTarea)
-                .flatMap(tarea -> tareaRepositorioPort.eliminar(tarea.getId()));
+                .flatMap(tarea -> tareaRepositorioPort.eliminar(tarea.getId()))
+                .then(historialChatCachePort.invalidar(codigoTarea));
     }
 
     @Override
@@ -53,11 +59,5 @@ public class TareaServicioImpl implements TareaServicio {
     @Override
     public Mono<Void> agregarMensajeChat(String codigoTarea, MensajeChat mensaje) {
         return tareaRepositorioPort.agregarMensajeChat(codigoTarea, mensaje);
-    }
-
-    @Override
-    public Mono<Tarea> actualizarResumen(String codigoTarea, String resumen) {
-        return tareaRepositorioPort.actualizarResumen(codigoTarea, resumen)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("No se encontró la tarea con código: " + codigoTarea)));
     }
 }
